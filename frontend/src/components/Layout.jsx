@@ -5,9 +5,9 @@ import FooterSection from "./Footer";
 export default function Layout({ children }) {
     return (
         <>
-            <Navbar />
+            {/* <Navbar /> */}
             <main>{children}</main>
-            <FooterSection />
+            {/* <FooterSection /> */}
         </>
     );
 }
