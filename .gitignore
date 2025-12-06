@@ -33,3 +33,7 @@ backend/venv/
 
 # Internal-only docs
 internal/implementation-guide.md
+internal/credentials/
+
+# Env files
+.env
