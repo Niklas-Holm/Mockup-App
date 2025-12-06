@@ -30,3 +30,6 @@ backend/venv/
 *.njsproj
 *.sln
 *.sw?
+
+# Internal-only docs
+internal/implementation-guide.md
