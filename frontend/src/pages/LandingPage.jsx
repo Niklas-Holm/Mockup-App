@@ -190,6 +190,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping }) {
                         whiteSpace: "pre-wrap",
                         margin: 0,
                         padding: 0,
+                        pointerEvents: "none",
                       }}
                     >
                       {getPreviewValue(variable) || "Sample"}
@@ -205,7 +206,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping }) {
                     src={getPreviewValue(variable) || ""}
                     alt={variable.label}
                     className="absolute inset-0 w-full h-full object-center"
-                    style={{ objectFit: variable.fit || "cover" }}
+                    style={{ objectFit: variable.fit || "cover", pointerEvents: "none" }}
                     onError={(e) => {
                       e.currentTarget.style.display = "none";
                     }}
