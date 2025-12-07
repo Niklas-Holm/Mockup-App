@@ -279,6 +279,8 @@ def draw_text_block(draw: ImageDraw.ImageDraw, variable: dict, text: str):
         start_y = y + max(h - total_height, 0)
     else:  # middle/default
         start_y = y + max((h - total_height) // 2, 0)
+    # Upward nudge (vertical only) to better match on-screen editor preview
+    start_y = max(start_y - int(line_height * 0.18), y)
 
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
