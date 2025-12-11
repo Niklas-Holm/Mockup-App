@@ -4,7 +4,7 @@ import { Rnd } from "react-rnd";
 const API_BASE = "http://localhost:8000/api";
 const BACKEND_BASE = API_BASE.replace(/\/api$/, "");
 
-function PlacementEditor({ template, onSave, previewRow, mapping }) {
+function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = false }) {
   const [localTemplate, setLocalTemplate] = useState(template);
   const [activeVarId, setActiveVarId] = useState(template?.variables?.[0]?.id || null);
   const [bgSize, setBgSize] = useState({ width: 1200, height: 700 });
@@ -85,18 +85,22 @@ function PlacementEditor({ template, onSave, previewRow, mapping }) {
   };
 
   return (
-    <div className="border rounded-lg p-3 space-y-3 bg-gray-50">
+    <div
+      className={`border rounded-lg p-3 space-y-3 ${
+        darkMode ? "bg-slate-800 border-slate-700" : "bg-gray-50 border-slate-200"
+      }`}
+    >
       <div className="flex items-center justify-between">
         <h3 className="font-semibold">Placement Editor</h3>
         <button
-          className="px-3 py-1 rounded bg-blue-600 text-white text-sm"
+          className="px-3 py-1 rounded bg-blue-600 text-white text-sm cursor-pointer"
           onClick={() => onSave(localTemplate)}
         >
           Save Template
         </button>
       </div>
       <div
-        className="relative border bg-white"
+        className={`relative border ${darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"}`}
         style={{
           width: Math.min(bgSize.width, 900),
           height: (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height,
@@ -150,7 +154,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping }) {
             >
               {variable.type === "text" ? (
                 <div className="w-full h-full relative overflow-hidden">
-                  <span className="absolute top-0 right-0 text-[10px] text-gray-600 bg-white/70 px-1 pointer-events-none">
+                  <span className="absolute top-0 right-0 text-[10px] text-gray-600 px-1 pointer-events-none bg-white/70">
                     {variable.label}
                   </span>
                   {(() => {
@@ -177,6 +181,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping }) {
                               whiteSpace: "pre-wrap",
                               margin: 0,
                               padding: 0,
+                              backgroundColor: "transparent",
                             }}
                           >
                             {line}
@@ -188,18 +193,23 @@ function PlacementEditor({ template, onSave, previewRow, mapping }) {
                 </div>
               ) : (
                 <div className="w-full h-full relative overflow-hidden">
-                  <span className="absolute top-0 left-0 text-[10px] text-gray-600 bg-white/70 px-1 pointer-events-none">
+                  <span className="absolute top-0 right-0 text-[10px] text-gray-600 px-1 pointer-events-none bg-white/70">
                     {variable.label}
                   </span>
-                  <img
-                    src={getPreviewValue(variable) || ""}
-                    alt={variable.label}
-                    className="absolute inset-0 w-full h-full object-center"
-                    style={{ objectFit: variable.fit || "cover", pointerEvents: "none" }}
-                    onError={(e) => {
-                      e.currentTarget.style.display = "none";
-                    }}
-                  />
+                  {(() => {
+                    const imgSrc = getPreviewValue(variable);
+                    return imgSrc ? (
+                      <img
+                        src={imgSrc}
+                        alt={variable.label}
+                        className="absolute inset-0 w-full h-full object-center"
+                        style={{ objectFit: variable.fit || "cover", pointerEvents: "none" }}
+                        onError={(e) => {
+                          e.currentTarget.style.display = "none";
+                        }}
+                      />
+                    ) : null;
+                  })()}
                 </div>
               )}
             </Rnd>
@@ -330,6 +340,7 @@ export default function LandingPage() {
   const [jobStatus, setJobStatus] = useState(null);
   const [loading, setLoading] = useState({ inspect: false, preview: false, batch: false, saveTemplate: false });
   const [error, setError] = useState("");
+  const [darkMode, setDarkMode] = useState(false);
   const stepsBarRef = React.useRef(null);
   const uploadRef = React.useRef(null);
   const mapRef = React.useRef(null);
@@ -368,6 +379,22 @@ export default function LandingPage() {
     };
     fetchTemplates();
   }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) {
+      root.classList.add("dark");
+    } else {
+      root.classList.remove("dark");
+    }
+  }, [darkMode]);
+
+  const cardClasses = darkMode
+    ? "bg-slate-800 border border-slate-700 text-slate-100"
+    : "bg-white border border-slate-200 text-slate-900";
+  const subText = darkMode ? "text-slate-300" : "text-slate-500";
+  const chipBase = darkMode ? "border-slate-700 bg-slate-800 text-slate-100" : "border-slate-200 bg-slate-50 text-slate-900";
+  const chipDone = darkMode ? "border-green-500/50 bg-green-900/30" : "border-green-200 bg-green-50";
 
   const handleCsvUpload = async (file) => {
     setCsvFile(file);
@@ -529,21 +556,31 @@ export default function LandingPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className={`min-h-screen ${darkMode ? "bg-slate-900 text-slate-100" : "bg-slate-50 text-slate-900"}`}>
       <div className="bg-gradient-to-r from-blue-700 via-indigo-600 to-blue-500 text-white">
-        <div className="max-w-6xl mx-auto px-6 py-8 space-y-2">
-          <p className="uppercase tracking-[0.2em] text-xs text-blue-100">Batch Mockups</p>
-          <h1 className="text-3xl font-semibold">Generate personalized mockups from your CSV</h1>
-          <p className="text-sm text-blue-100 max-w-2xl">
-            Upload leads, map variables, place them visually, preview a few rows, then ship everything to Cloudinary with an updated CSV.
-          </p>
+        <div className="max-w-6xl mx-auto px-6 py-8 space-y-2 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div className="space-y-2">
+            <p className="uppercase tracking-[0.2em] text-xs text-blue-100">Batch Mockups</p>
+            <h1 className="text-3xl font-semibold">Generate personalized mockups from your CSV</h1>
+            <p className="text-sm text-blue-100 max-w-2xl">
+              Upload leads, map variables, place them visually, preview a few rows, then ship everything to Cloudinary with an updated CSV.
+            </p>
+          </div>
+          <button
+            className="self-start px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
+            onClick={() => setDarkMode((v) => !v)}
+          >
+            {darkMode ? "Switch to Light" : "Switch to Dark"}
+          </button>
         </div>
       </div>
 
       <div className="max-w-6xl mx-auto px-6 -mt-6 pb-12 space-y-6 relative">
         <div
           ref={stepsBarRef}
-          className="sticky top-0 z-20 bg-white/90 backdrop-blur border border-slate-200 rounded-xl shadow-sm px-4 py-3 flex flex-col gap-2"
+          className={`sticky top-0 z-20 backdrop-blur border rounded-xl shadow-sm px-4 py-3 flex flex-col gap-2 ${
+            darkMode ? "bg-slate-800/90 border-slate-700" : "bg-white/90 border-slate-200"
+          }`}
         >
           <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
             <span className="font-semibold text-slate-800">CSV:</span>
@@ -558,13 +595,17 @@ export default function LandingPage() {
               <div
                 key={s.key}
                 className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm cursor-pointer ${
-                  s.done ? "border-green-200 bg-green-50" : "border-slate-200 bg-slate-50"
-                }`}
+                  s.done ? chipDone : chipBase
+                } ${darkMode ? "hover:border-blue-500/60 hover:bg-blue-900/30" : "hover:border-blue-300 hover:bg-blue-50"}`}
                 onClick={() => scrollToRef(s.ref)}
               >
                 <div
                   className={`h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-semibold ${
-                    s.done ? "bg-green-600 text-white" : "bg-slate-200 text-slate-700"
+                    s.done
+                      ? "bg-green-600 text-white"
+                      : darkMode
+                      ? "bg-slate-700 text-slate-200"
+                      : "bg-slate-200 text-slate-700"
                   }`}
                 >
                   {idx + 1}
@@ -581,15 +622,15 @@ export default function LandingPage() {
         <div className="space-y-6 pt-2">
           {error && <div className="bg-red-50 text-red-800 border border-red-200 px-3 py-2 rounded">{error}</div>}
 
-          <section ref={uploadRef} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+          <section ref={uploadRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-3`}>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-slate-500 font-semibold">Step 1</p>
+                <p className={`text-xs font-semibold ${subText}`}>Step 1</p>
                 <h2 className="text-lg font-semibold">Upload CSV</h2>
-                <p className="text-sm text-slate-500">We’ll detect headers and show a sample.</p>
+                <p className={`text-sm ${subText}`}>We’ll detect headers and show a sample.</p>
               </div>
               <button
-                className="px-3 py-2 text-sm rounded bg-slate-900 text-white disabled:bg-slate-300"
+            className="px-3 py-2 text-sm rounded bg-slate-900 text-white disabled:bg-slate-300"
                 disabled={!csvFile}
                 onClick={() => document.getElementById("csv-input")?.click()}
               >
@@ -597,9 +638,9 @@ export default function LandingPage() {
               </button>
             </div>
             <label
-              className="border-2 border-dashed border-slate-300 rounded-lg bg-slate-50 hover:border-blue-400 transition p-4 cursor-pointer flex flex-col gap-2"
-              htmlFor="csv-input"
-            >
+                className="border-2 border-dashed border-slate-300 rounded-lg bg-slate-50 hover:border-blue-400 transition p-4 cursor-pointer flex flex-col gap-2"
+                htmlFor="csv-input"
+              >
               <span className="text-sm font-semibold">{csvFile ? csvFile.name : "Drop or select a CSV"}</span>
               <span className="text-xs text-slate-500">We only read it locally; nothing is sent until you run.</span>
               <input
@@ -625,16 +666,16 @@ export default function LandingPage() {
             )}
           </section>
 
-          <section ref={mapRef} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-4">
+          <section ref={mapRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-4`}>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-slate-500 font-semibold">Step 2</p>
+                <p className={`text-xs font-semibold ${subText}`}>Step 2</p>
                 <h2 className="text-lg font-semibold">Template & Variable Mapping</h2>
-                <p className="text-sm text-slate-500">Add variables, map them to CSV headers, then save.</p>
+                <p className={`text-sm ${subText}`}>Add variables, map them to CSV headers, then save.</p>
               </div>
               <div className="flex gap-2">
                 <button
-                  className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:bg-slate-300"
+                  className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:bg-slate-300 cursor-pointer"
                   disabled={!currentTemplate}
                   onClick={() => currentTemplate && handleTemplateSave(currentTemplate)}
                 >
@@ -645,7 +686,7 @@ export default function LandingPage() {
             <div className="flex flex-wrap gap-3 items-center">
               <label className="text-sm font-semibold text-slate-700">Template</label>
               <select
-                className="border rounded px-3 py-2 text-sm"
+                className="border rounded px-3 py-2 text-sm cursor-pointer"
                 value={currentTemplate?.id || ""}
                 onChange={(e) => {
                   const tpl = templates.find((t) => t.id === e.target.value);
@@ -660,14 +701,14 @@ export default function LandingPage() {
               </select>
               <div className="flex gap-2">
                 <button
-                  className="px-3 py-1 rounded bg-slate-100 text-sm border"
+                  className="px-3 py-1 rounded bg-slate-100 text-sm border cursor-pointer"
                   onClick={() => addVariable("text")}
                   disabled={!currentTemplate}
                 >
                   + Text variable
                 </button>
                 <button
-                  className="px-3 py-1 rounded bg-slate-100 text-sm border"
+                  className="px-3 py-1 rounded bg-slate-100 text-sm border cursor-pointer"
                   onClick={() => addVariable("image")}
                   disabled={!currentTemplate}
                 >
@@ -684,7 +725,7 @@ export default function LandingPage() {
                       <p className="text-xs text-slate-500">{v.type === "text" ? "Text" : "Image"} • {v.id}</p>
                     </div>
                     <select
-                      className="border rounded px-2 py-1 text-sm"
+                      className="border rounded px-2 py-1 text-sm cursor-pointer"
                       value={mapping[v.id] || ""}
                       onChange={(e) => handleMappingChange(v.id, e.target.value)}
                     >
@@ -704,12 +745,12 @@ export default function LandingPage() {
             )}
           </section>
 
-          <section ref={placeRef} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+          <section ref={placeRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-3`}>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-slate-500 font-semibold">Step 3</p>
+                <p className={`text-xs font-semibold ${subText}`}>Step 3</p>
                 <h2 className="text-lg font-semibold">Placement</h2>
-                <p className="text-sm text-slate-500">Drag, resize, and style variables. Live content uses the first row.</p>
+                <p className={`text-sm ${subText}`}>Drag, resize, and style variables. Live content uses the first row.</p>
               </div>
               {loading.saveTemplate && <p className="text-xs text-slate-500">Saving...</p>}
             </div>
@@ -719,16 +760,17 @@ export default function LandingPage() {
                 onSave={handleTemplateSave}
                 previewRow={sampleRows[0]}
                 mapping={mapping}
+                darkMode={darkMode}
               />
             )}
           </section>
 
-          <section ref={previewRef} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+          <section ref={previewRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-3`}>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-slate-500 font-semibold">Step 4</p>
+                <p className={`text-xs font-semibold ${subText}`}>Step 4</p>
                 <h2 className="text-lg font-semibold">Preview Sample</h2>
-                <p className="text-sm text-slate-500">Render a few rows to sanity check before running.</p>
+                <p className={`text-sm ${subText}`}>Render a few rows to sanity check before running.</p>
               </div>
               <button
                 className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:bg-slate-300"
@@ -754,12 +796,12 @@ export default function LandingPage() {
             )}
           </section>
 
-          <section ref={runRef} className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 space-y-3">
+          <section ref={runRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-3`}>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-slate-500 font-semibold">Step 5</p>
+                <p className={`text-xs font-semibold ${subText}`}>Step 5</p>
                 <h2 className="text-lg font-semibold">Run & Results</h2>
-                <p className="text-sm text-slate-500">Upload all mockups to Cloudinary and download your updated CSV.</p>
+                <p className={`text-sm ${subText}`}>Upload all mockups to Cloudinary and download your updated CSV.</p>
               </div>
               <button
                 className="px-3 py-2 rounded bg-green-600 text-white text-sm disabled:bg-slate-300"
