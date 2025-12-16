@@ -10,11 +10,12 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 import requests
-from fastapi import File, Form, HTTPException, UploadFile
+from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from PIL import Image, ImageDraw, ImageFont
 
 # Optional Cloudinary dependency
@@ -47,6 +48,9 @@ def load_env(path: str = ".env"):
 # Load environment early so Cloudinary config sees it
 load_env()
 
+from db import Base, SessionLocal, engine, get_session  # noqa: E402
+from models import Job, Template  # noqa: E402
+
 CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
 CLOUD_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
 CLOUD_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
@@ -73,10 +77,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "template")), name="static")
-
-# In-memory stores (replace with DB when ready)
-TEMPLATES: Dict[str, dict] = {}
-JOBS: Dict[str, dict] = {}
 
 
 # === Helpers ===
@@ -396,6 +396,29 @@ def paste_image(draw_image: Image.Image, variable: dict, value: str):
         draw_image.paste(img, (paste_x, paste_y))
 
 
+def template_to_dict(tpl: Template) -> dict:
+    return {
+        "id": tpl.id,
+        "name": tpl.name,
+        "baseImagePath": tpl.base_image_path,
+        "variables": tpl.variables or [],
+    }
+
+
+def job_to_dict(job: Job) -> dict:
+    return {
+        "id": job.id,
+        "status": job.status,
+        "progress": job.progress,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "results": job.results or [],
+        "rows": job.rows or [],
+        "mapping": job.mapping or {},
+        "template_id": job.template_id,
+        "csv_path": job.csv_path,
+    }
+
+
 def apply_variables(template: dict, row: dict, mapping: dict) -> Image.Image:
     base_path = resolve_template_image_path(template["baseImagePath"])
     if not os.path.exists(base_path):
@@ -484,7 +507,11 @@ def serialize_rows_to_csv(rows: List[dict], mockup_column: str = "mockup_url") -
 
 async def run_job(job_id: str, rows: List[dict], template: dict, mapping: dict):
     ensure_data_dir()
-    job = JOBS[job_id]
+    session = SessionLocal()
+    job = session.get(Job, job_id)
+    if not job:
+        session.close()
+        return
     total = len(rows)
     results = []
     mockup_column = "mockup_url"
@@ -502,54 +529,92 @@ async def run_job(job_id: str, rows: List[dict], template: dict, mapping: dict):
             status["error"] = str(e)
             row[mockup_column] = ""
         results.append(status)
-        job["progress"] = int(((idx + 1) / total) * 100)
-        job["results"] = results
-        job["rows"][idx] = row
+        job.progress = int(((idx + 1) / total) * 100)
+        job.results = results
+        stored_rows = job.rows or []
+        if len(stored_rows) <= idx:
+            stored_rows.append(row)
+        else:
+            stored_rows[idx] = row
+        job.rows = stored_rows
+        session.add(job)
+        session.commit()
 
-    csv_text = serialize_rows_to_csv(job["rows"], mockup_column)
+    csv_text = serialize_rows_to_csv(job.rows or [], mockup_column)
     csv_path = os.path.join(DATA_DIR, f"job_{job_id}.csv")
     with open(csv_path, "w", encoding="utf-8") as f:
         f.write(csv_text)
 
-    job["status"] = "done"
-    job["csv_path"] = csv_path
+    job.status = "done"
+    job.csv_path = csv_path
+    session.add(job)
+    session.commit()
+    session.close()
 
 
 # === Routes ===
 @app.on_event("startup")
 async def seed_templates():
-    if not TEMPLATES:
-        tpl = default_template()
-        TEMPLATES[tpl["id"]] = tpl
-        roofing_path = os.path.join(BASE_DIR, "template", "roofing-template.jpg")
-        if os.path.exists(roofing_path):
-            rt = roofing_template()
-            TEMPLATES[rt["id"]] = rt
-        plumber_path = os.path.join(BASE_DIR, "template", "plumber-template-1.png")
-        if os.path.exists(plumber_path):
-            pt = plumber_template()
-            TEMPLATES[pt["id"]] = pt
+    Base.metadata.create_all(engine)
+    session = SessionLocal()
+    try:
+        has_templates = session.query(Template).first()
+        if not has_templates:
+            templates = [default_template()]
+            roofing_path = os.path.join(BASE_DIR, "template", "roofing-template.jpg")
+            if os.path.exists(roofing_path):
+                templates.append(roofing_template())
+            plumber_path = os.path.join(BASE_DIR, "template", "plumber-template-1.png")
+            if os.path.exists(plumber_path):
+                templates.append(plumber_template())
+            for tpl in templates:
+                session.add(
+                    Template(
+                        id=tpl["id"],
+                        name=tpl["name"],
+                        base_image_path=tpl["baseImagePath"],
+                        variables=tpl.get("variables", []),
+                    )
+                )
+            session.commit()
+    finally:
+        session.close()
 
 
 @app.get("/api/templates")
-async def list_templates():
-    return {"templates": list(TEMPLATES.values())}
+async def list_templates(db: Session = Depends(get_session)):
+    templates = db.query(Template).all()
+    return {"templates": [template_to_dict(t) for t in templates]}
 
 
 @app.get("/api/templates/{template_id}")
-async def get_template(template_id: str):
-    tpl = TEMPLATES.get(template_id)
+async def get_template(template_id: str, db: Session = Depends(get_session)):
+    tpl = db.get(Template, template_id)
     if not tpl:
         raise HTTPException(status_code=404, detail="Template not found")
-    return tpl
+    return template_to_dict(tpl)
 
 
 @app.post("/api/templates")
-async def create_or_update_template(payload: dict):
+async def create_or_update_template(payload: dict, db: Session = Depends(get_session)):
     tpl_id = payload.get("id") or uuid.uuid4().hex
     payload["id"] = tpl_id
-    TEMPLATES[tpl_id] = payload
-    return {"template": payload}
+    tpl = db.get(Template, tpl_id)
+    if tpl:
+        tpl.name = payload.get("name", tpl.name)
+        tpl.base_image_path = payload.get("baseImagePath", tpl.base_image_path)
+        tpl.variables = payload.get("variables", tpl.variables)
+    else:
+        tpl = Template(
+            id=tpl_id,
+            name=payload.get("name", "Untitled"),
+            base_image_path=payload.get("baseImagePath", ""),
+            variables=payload.get("variables", []),
+        )
+        db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return {"template": template_to_dict(tpl)}
 
 
 @app.post("/api/csv/inspect")
@@ -565,14 +630,16 @@ async def preview_mockups(
     mapping: str = Form(...),
     limit: int = Form(3),
     csv_file: UploadFile = File(...),
+    db: Session = Depends(get_session),
 ):
     try:
         mapping_dict = json.loads(mapping)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid mapping JSON")
-    tpl = TEMPLATES.get(template_id)
-    if not tpl:
+    tpl_obj = db.get(Template, template_id)
+    if not tpl_obj:
         raise HTTPException(status_code=404, detail="Template not found")
+    tpl = template_to_dict(tpl_obj)
     rows = parse_csv_file(csv_file)
     previews = []
     for idx, row in enumerate(rows[:limit]):
@@ -595,50 +662,53 @@ async def start_batch(
     template_id: str = Form(...),
     mapping: str = Form(...),
     csv_file: UploadFile = File(...),
+    db: Session = Depends(get_session),
 ):
     try:
         mapping_dict = json.loads(mapping)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid mapping JSON")
-    tpl = TEMPLATES.get(template_id)
-    if not tpl:
+    tpl_obj = db.get(Template, template_id)
+    if not tpl_obj:
         raise HTTPException(status_code=404, detail="Template not found")
+    tpl = template_to_dict(tpl_obj)
     rows = parse_csv_file(csv_file)
     if not rows:
         raise HTTPException(status_code=400, detail="CSV has no rows")
 
     job_id = uuid.uuid4().hex
-    JOBS[job_id] = {
-        "id": job_id,
-        "status": "running",
-        "progress": 0,
-        "results": [],
-        "created_at": datetime.utcnow().isoformat(),
-        "rows": rows,
-        "mapping": mapping_dict,
-        "template_id": template_id,
-        "csv_path": None,
-    }
+    job = Job(
+        id=job_id,
+        status="running",
+        progress=0,
+        results=[],
+        rows=rows,
+        mapping=mapping_dict,
+        template_id=template_id,
+        csv_path=None,
+    )
+    db.add(job)
+    db.commit()
     asyncio.create_task(run_job(job_id, rows, tpl, mapping_dict))
     return {"job_id": job_id, "total_rows": len(rows)}
 
 
 @app.get("/api/jobs/{job_id}")
-async def job_status(job_id: str):
-    job = JOBS.get(job_id)
+async def job_status(job_id: str, db: Session = Depends(get_session)):
+    job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    return job_to_dict(job)
 
 
 @app.get("/api/jobs/{job_id}/csv")
-async def download_job_csv(job_id: str):
-    job = JOBS.get(job_id)
+async def download_job_csv(job_id: str, db: Session = Depends(get_session)):
+    job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("status") != "done":
+    if job.status != "done":
         raise HTTPException(status_code=400, detail="Job not finished")
-    csv_path = job.get("csv_path")
+    csv_path = job.csv_path
     if not csv_path or not os.path.exists(csv_path):
         raise HTTPException(status_code=404, detail="CSV not found")
     return FileResponse(csv_path, media_type="text/csv", filename=os.path.basename(csv_path))

@@ -3,3 +3,5 @@ uvicorn[standard]
 pillow
 requests
 cloudinary
+sqlalchemy
+psycopg[binary]
