@@ -1,8 +1,12 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect } from "react";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import Layout from "./components/Layout";
-import LandingPage from "./pages/LandingPage";
+import ProtectedRoute from "./components/ProtectedRoute";
+import AppPage from "./pages/AppPage";
+import LoginPage from "./pages/LoginPage";
+import MarketingPage from "./pages/MarketingPage";
 import NotFoundPage from "./pages/NotFoundPage";
+import SignupPage from "./pages/SignupPage";
 
 function ScrollToTop() {
     const { pathname } = useLocation();
@@ -22,7 +26,17 @@ export default function App() {
             <ScrollToTop />
             <Layout>
                 <Routes>
-                    <Route path="/" element={<LandingPage />} />
+                    <Route path="/" element={<MarketingPage />} />
+                    <Route path="/signup" element={<SignupPage />} />
+                    <Route path="/login" element={<LoginPage />} />
+                    <Route
+                        path="/app"
+                        element={
+                            <ProtectedRoute>
+                                <AppPage />
+                            </ProtectedRoute>
+                        }
+                    />
                     <Route path="*" element={<NotFoundPage />} />
                 </Routes>
             </Layout>

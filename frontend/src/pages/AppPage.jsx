@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Rnd } from "react-rnd";
+import { useAuth } from "../context/AuthContext";
 
 const API_BASE = "http://localhost:8000/api";
 const BACKEND_BASE = API_BASE.replace(/\/api$/, "");
@@ -328,7 +330,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
   );
 }
 
-export default function LandingPage() {
+export default function AppPage() {
   const [csvFile, setCsvFile] = useState(null);
   const [headers, setHeaders] = useState([]);
   const [sampleRows, setSampleRows] = useState([]);
@@ -347,6 +349,13 @@ export default function LandingPage() {
   const placeRef = React.useRef(null);
   const previewRef = React.useRef(null);
   const runRef = React.useRef(null);
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  const handleLogout = () => {
+    logout();
+    navigate("/");
+  };
 
   const steps = [
     { key: "upload", label: "Upload CSV", done: !!csvFile, tip: csvFile?.name || "Awaiting file", ref: uploadRef },
@@ -387,6 +396,9 @@ export default function LandingPage() {
     } else {
       root.classList.remove("dark");
     }
+    return () => {
+      root.classList.remove("dark");
+    };
   }, [darkMode]);
 
   const cardClasses = darkMode
@@ -566,12 +578,25 @@ export default function LandingPage() {
               Upload leads, map variables, place them visually, preview a few rows, then ship everything to Cloudinary with an updated CSV.
             </p>
           </div>
-          <button
-            className="self-start px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
-            onClick={() => setDarkMode((v) => !v)}
-          >
-            {darkMode ? "Switch to Light" : "Switch to Dark"}
-          </button>
+          <div className="flex items-center gap-2 self-start md:self-auto">
+            {user && (
+              <span className="px-3 py-1 rounded bg-white/10 text-xs text-blue-50/90 border border-white/10">
+                Signed in as {user.name || user.email}
+              </span>
+            )}
+            <button
+              className="px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
+              onClick={() => setDarkMode((v) => !v)}
+            >
+              {darkMode ? "Switch to Light" : "Switch to Dark"}
+            </button>
+            <button
+              className="px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
+              onClick={handleLogout}
+            >
+              Log out
+            </button>
+          </div>
         </div>
       </div>
 

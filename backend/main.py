@@ -223,6 +223,62 @@ def roofing_template():
     }
 
 
+def plumber_template():
+    """Seed a plumber/handyman template if the asset exists."""
+    return {
+        "id": "plumber-1",
+        "name": "Plumber Mockup",
+        "baseImagePath": "/static/plumber-template-1.png",
+        "variables": [
+            {
+                "id": "short_name",
+                "label": "Short Name",
+                "type": "text",
+                "x": 90,
+                "y": 200,
+                "w": 720,
+                "h": 200,
+                "style": {
+                    "font": "Inter_Bold",
+                    "size": 64,
+                    "weight": "bold",
+                    "color": "#ffffff",
+                    "align": "left",
+                },
+                "defaultValue": "",
+            },
+            {
+                "id": "full_name",
+                "label": "Full Name",
+                "type": "text",
+                "x": 90,
+                "y": 420,
+                "w": 660,
+                "h": 140,
+                "style": {
+                    "font": "Inter_Regular",
+                    "size": 32,
+                    "weight": "bold",
+                    "color": "#d6e2ff",
+                    "align": "left",
+                },
+                "defaultValue": "",
+            },
+            {
+                "id": "logo",
+                "label": "Logo",
+                "type": "image",
+                "x": 90,
+                "y": 90,
+                "w": 200,
+                "h": 120,
+                "fit": "contain",
+                "defaultValue": "",
+            },
+        ],
+    }
+
+
 def get_font(style: dict):
     font_name = style.get("font", "Inter_Bold")
     size = style.get("size", 32)
@@ -469,6 +525,10 @@ async def seed_templates():
         if os.path.exists(roofing_path):
             rt = roofing_template()
             TEMPLATES[rt["id"]] = rt
+        plumber_path = os.path.join(BASE_DIR, "template", "plumber-template-1.png")
+        if os.path.exists(plumber_path):
+            pt = plumber_template()
+            TEMPLATES[pt["id"]] = pt
 
 
 @app.get("/api/templates")
