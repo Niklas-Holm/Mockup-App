@@ -754,6 +754,11 @@ export default function AppPage() {
   const subText = darkMode ? "text-slate-300" : "text-slate-500";
   const chipBase = darkMode ? "border-slate-700 bg-slate-800 text-slate-100" : "border-slate-200 bg-slate-50 text-slate-900";
   const chipDone = darkMode ? "border-green-500/50 bg-green-900/30" : "border-green-200 bg-green-50";
+  const stepsBarText = darkMode ? "text-slate-200" : "text-slate-600";
+  const stepsBarLabel = darkMode ? "text-slate-100" : "text-slate-800";
+  const stepsBarPill = darkMode
+    ? "px-2 py-1 rounded bg-slate-700 border border-slate-600 text-slate-100"
+    : "px-2 py-1 rounded bg-slate-100 text-slate-800";
 
   const handleCsvUpload = async (file) => {
     setCsvFile(file);
@@ -996,32 +1001,36 @@ export default function AppPage() {
   return (
     <div className={`min-h-screen ${darkMode ? "bg-slate-900 text-slate-100" : "bg-slate-50 text-slate-900"}`}>
       <div className="bg-gradient-to-r from-blue-700 via-indigo-600 to-blue-500 text-white">
-        <div className="max-w-6xl mx-auto px-6 py-8 space-y-2 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div className="space-y-2">
-            <p className="uppercase tracking-[0.2em] text-xs text-blue-100">Batch Mockups</p>
-            <h1 className="text-3xl font-semibold">Generate personalized mockups from your CSV</h1>
-            <p className="text-sm text-blue-100 max-w-2xl">
-              Upload leads, map variables, place them visually, preview a few rows, then ship everything to Cloudinary with an updated CSV.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 self-start md:self-auto">
-            {user && (
-              <span className="px-3 py-1 rounded bg-white/10 text-xs text-blue-50/90 border border-white/10">
-                Signed in as {user.name || user.email}
-              </span>
-            )}
-            <button
-              className="px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
-              onClick={() => setDarkMode((v) => !v)}
-            >
-              {darkMode ? "Switch to Light" : "Switch to Dark"}
-            </button>
-            <button
-              className="px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
-              onClick={handleLogout}
-            >
-              Log out
-            </button>
+        <div className="max-w-6xl mx-auto px-6 py-8 space-y-3">
+          <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+            <div className="space-y-2 min-w-[260px] flex-1">
+              <p className="uppercase tracking-[0.2em] text-xs text-blue-100">Batch Mockups</p>
+              <h1 className="text-3xl font-semibold">Generate personalized mockups from your CSV</h1>
+              <p className="text-sm text-blue-100 max-w-2xl">
+                Upload leads, map variables, place them visually, preview a few rows, then ship everything to Cloudinary with an updated CSV.
+              </p>
+            </div>
+            <div className="flex flex-col items-end gap-2 w-full md:w-auto">
+              {user && (
+                <span className="px-3 py-1 rounded bg-white/10 text-xs text-blue-50/90 border border-white/10 self-end">
+                  Signed in as {user.name || user.email}
+                </span>
+              )}
+              <div className="flex items-center gap-2 justify-end mt-3 md:mt-5">
+                <button
+                  className="px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
+                  onClick={() => setDarkMode((v) => !v)}
+                >
+                  {darkMode ? "Switch to Light" : "Switch to Dark"}
+                </button>
+                <button
+                  className="px-3 py-2 rounded border border-white/30 text-sm bg-white/10 hover:bg-white/20 transition cursor-pointer"
+                  onClick={handleLogout}
+                >
+                  Log out
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1033,11 +1042,11 @@ export default function AppPage() {
             darkMode ? "bg-slate-800/90 border-slate-700" : "bg-white/90 border-slate-200"
           }`}
         >
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
-            <span className="font-semibold text-slate-800">CSV:</span>
-            <span className="px-2 py-1 bg-slate-100 rounded">{csvFile ? csvFile.name : "None"}</span>
-            <span className="font-semibold text-slate-800">Template:</span>
-            <span className="px-2 py-1 bg-slate-100 rounded">
+          <div className={`flex flex-wrap items-center gap-3 text-xs ${stepsBarText}`}>
+            <span className={`font-semibold ${stepsBarLabel}`}>CSV:</span>
+            <span className={stepsBarPill}>{csvFile ? csvFile.name : "None"}</span>
+            <span className={`font-semibold ${stepsBarLabel}`}>Template:</span>
+            <span className={stepsBarPill}>
               {currentTemplate ? currentTemplate.name : "None"}
             </span>
           </div>
