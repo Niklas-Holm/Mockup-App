@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Rnd } from "react-rnd";
 import { useAuth } from "../context/AuthContext";
@@ -412,7 +412,6 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
                 }
                 bounds="parent"
                 onClick={() => setActiveVarId(variable.id)}
-                style={{ zIndex: 10 }}
                 className={`border-2 ${
                   activeVarId === variable.id ? "border-blue-500" : "border-orange-400"
                 } bg-orange-200/30`}
@@ -691,6 +690,7 @@ export default function AppPage() {
   const placeRef = React.useRef(null);
   const previewRef = React.useRef(null);
   const runRef = React.useRef(null);
+  const pollTimerRef = React.useRef(null);
   const navigate = useNavigate();
   const { user, logout, authFetch, token } = useAuth();
 
@@ -883,19 +883,29 @@ export default function AppPage() {
     }
   };
 
-  const pollJob = async (id) => {
-    try {
-      const res = await authFetch(`${API_BASE}/jobs/${id}`);
-      if (!res.ok) throw new Error("Failed to fetch job");
-      const data = await res.json();
-      setJobStatus(data);
-      if (data.status !== "done") {
-        setTimeout(() => pollJob(id), 1500);
+  const pollJob = useCallback(
+    async (id) => {
+      try {
+        const res = await authFetch(`${API_BASE}/jobs/${id}`);
+        if (!res.ok) throw new Error("Failed to fetch job");
+        const data = await res.json();
+        const derivedProgress = (() => {
+          const resultsCount = data.results?.length || 0;
+          const total = data.rows?.length || resultsCount || 1;
+          const ratio = total ? Math.round((resultsCount / total) * 100) : 0;
+          return Math.max(data.progress || 0, ratio);
+        })();
+        setJobStatus({ ...data, progress: derivedProgress });
+        // Debug aid while tracking progress issues
+        console.debug("pollJob", id, "progress", derivedProgress, "results", data.results?.length || 0);
+        return { ...data, progress: derivedProgress };
+      } catch (e) {
+        console.error(e);
+        return null;
       }
-    } catch (e) {
-      console.error(e);
-    }
-  };
+    },
+    [authFetch]
+  );
 
   useEffect(() => {
     if (activePreview && !previewItems.find((p) => p.row === activePreview.row)) {
@@ -949,6 +959,7 @@ export default function AppPage() {
       const res = await authFetch(`${API_BASE}/batch`, { method: "POST", body: formData });
       if (!res.ok) throw new Error("Batch start failed");
       const data = await res.json();
+      console.debug("Batch started", data.job_id);
       setJobId(data.job_id);
       setJobStatus((prev) => ({
         ...(prev || {}),
@@ -957,8 +968,6 @@ export default function AppPage() {
         results: [],
         id: data.job_id,
       }));
-      // Trigger immediate poll so the user sees progress right away
-      pollJob(data.job_id);
     } catch (e) {
       setError(e.message);
       setJobStatus(null);
@@ -1053,6 +1062,37 @@ export default function AppPage() {
       setLoading((prev) => ({ ...prev, uploadTemplate: false }));
     }
   };
+
+  // Start polling whenever we have a jobId
+  useEffect(() => {
+    if (!jobId) return undefined;
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    console.debug("Starting poll loop for job", jobId);
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      await pollJob(jobId);
+    };
+    run();
+    const timer = setInterval(run, 1000);
+    pollTimerRef.current = timer;
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      pollTimerRef.current = null;
+    };
+  }, [jobId, pollJob]);
+
+  // Stop polling when job completes
+  useEffect(() => {
+    if (jobStatus?.status === "done" && pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, [jobStatus]);
 
   return (
     <div className={`min-h-screen ${darkMode ? "bg-slate-900 text-slate-100" : "bg-slate-50 text-slate-900"}`}>
@@ -1550,34 +1590,36 @@ export default function AppPage() {
                     </span>
                   )}
                 </div>
-                <div className="grid sm:grid-cols-2 gap-2 max-h-64 overflow-auto">
-                  {jobStatus.results?.map((r) => (
-                    <div key={r.row} className="border rounded p-2 text-sm bg-slate-50">
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold">Row {r.row + 1}</span>
-                        <span
-                          className={`text-xs px-2 py-0.5 rounded ${
-                            r.status === "done"
-                              ? "bg-green-100 text-green-700"
-                            : r.status === "error"
-                              ? "bg-red-100 text-red-700"
-                              : r.status === "skipped"
-                              ? "bg-yellow-100 text-yellow-700"
-                              : "bg-slate-100 text-slate-700"
-                          }`}
-                        >
-                          {r.status}
-                        </span>
+                {jobStatus.status === "done" && (
+                  <div className="grid sm:grid-cols-2 gap-2 max-h-64 overflow-auto">
+                    {jobStatus.results?.map((r) => (
+                      <div key={r.row} className="border rounded p-2 text-sm bg-slate-50">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold">Row {r.row + 1}</span>
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded ${
+                              r.status === "done"
+                                ? "bg-green-100 text-green-700"
+                                : r.status === "error"
+                                  ? "bg-red-100 text-red-700"
+                                  : r.status === "skipped"
+                                  ? "bg-yellow-100 text-yellow-700"
+                                  : "bg-slate-100 text-slate-700"
+                            }`}
+                          >
+                            {r.status}
+                          </span>
+                        </div>
+                        {r.url && (
+                          <a className="text-blue-600 text-xs break-all" href={r.url} target="_blank" rel="noreferrer">
+                            {r.url}
+                          </a>
+                        )}
+                        {r.error && <p className="text-xs text-red-600 mt-1">{r.error}</p>}
                       </div>
-                      {r.url && (
-                        <a className="text-blue-600 text-xs break-all" href={r.url} target="_blank" rel="noreferrer">
-                          {r.url}
-                        </a>
-                      )}
-                      {r.error && <p className="text-xs text-red-600 mt-1">{r.error}</p>}
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </section>

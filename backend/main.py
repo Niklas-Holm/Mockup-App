@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional, Set
 
+import logging
 import requests
 from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi import FastAPI
@@ -58,6 +59,9 @@ load_env()
 
 from db import Base, SessionLocal, engine, get_session  # noqa: E402
 from models import Job, ProcessedCompany, Template, User  # noqa: E402
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
 
 CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
 CLOUD_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
@@ -686,7 +690,7 @@ def serialize_rows_to_csv(rows: List[dict], mockup_column: str = "mockup_url") -
     return output.getvalue()
 
 
-async def run_job(
+def process_job(
     job_id: str,
     rows: List[dict],
     template: dict,
@@ -699,6 +703,7 @@ async def run_job(
     if not job:
         session.close()
         return
+    logger.info("Job %s started with %s rows", job_id, len(rows))
     total = len(rows)
     results = []
     mockup_column = "mockup_url"
@@ -744,6 +749,7 @@ async def run_job(
         job.rows = stored_rows
         session.add(job)
         session.commit()
+        logger.info("Job %s progress %s%% (%s/%s)", job_id, job.progress, idx + 1, total)
 
     # Ensure DB has the latest rows including mockup URLs
     job.rows = stored_rows
@@ -751,6 +757,7 @@ async def run_job(
     job.csv_path = None
     session.add(job)
     session.commit()
+    logger.info("Job %s completed", job_id)
     session.close()
 
 
@@ -1007,8 +1014,18 @@ async def start_batch(
     )
     db.add(job)
     db.commit()
-    asyncio.create_task(
-        run_job(job_id, rows, tpl, mapping_dict, skip_processed=bool(skip_processed), identifier_column=identifier_column)
+    # Run blocking job generation in a thread to keep the event loop responsive
+    loop = asyncio.get_event_loop()
+    loop.create_task(
+        asyncio.to_thread(
+            process_job,
+            job_id,
+            rows,
+            tpl,
+            mapping_dict,
+            bool(skip_processed),
+            identifier_column,
+        )
     )
     return {"job_id": job_id, "total_rows": len(rows)}
 
@@ -1024,7 +1041,24 @@ async def job_status(
         raise HTTPException(status_code=404, detail="Job not found")
     if job.owner_id and job.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="You do not have access to this job.")
-    return job_to_dict(job)
+    # Derive progress from processed rows to avoid stale 0% readings
+    derived_progress = job.progress or 0
+    try:
+        total = len(job.rows or [])
+        processed = len(job.results or [])
+        done_like = len([r for r in job.results or [] if r.get("status") in ("done", "skipped", "error")])
+        derived_progress = int((max(processed, done_like) / total) * 100) if total else job.progress or 0
+        if derived_progress > (job.progress or 0):
+            job.progress = derived_progress
+            db.add(job)
+            db.commit()
+            logger.info("Job %s derived progress updated to %s%% (processed=%s/%s)", job_id, derived_progress, processed, total)
+    except Exception:
+        pass
+    data = job_to_dict(job)
+    data["progress"] = max(data.get("progress") or 0, derived_progress or 0)
+    logger.info("Job %s status polled: %s%%, stored=%s", job_id, data["progress"], job.progress)
+    return data
 
 
 @app.get("/api/jobs/{job_id}/csv")

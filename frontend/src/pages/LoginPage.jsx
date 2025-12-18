@@ -70,6 +70,7 @@ export default function LoginPage() {
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm((prev) => ({ ...prev, email: e.target.value }))}
+                autoComplete="email"
                 className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-400"
                 placeholder="you@company.com"
                 required
@@ -81,6 +82,7 @@ export default function LoginPage() {
                 type="password"
                 value={form.password}
                 onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
+                autoComplete="current-password"
                 className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 py-2 text-slate-50 focus:outline-none focus:ring-2 focus:ring-teal-400"
                 placeholder="Your password"
                 required
