@@ -17,13 +17,13 @@ export default function LoginPage() {
     }
   }, [navigate, redirectTo, user]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setSubmitting(true);
     try {
-      login(form);
-      navigate(redirectTo);
+      await login(form);
+      navigate(redirectTo, { replace: true });
     } catch (err) {
       setError(err.message || "Unable to log in right now.");
     } finally {
@@ -41,7 +41,7 @@ export default function LoginPage() {
           <p className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-xs uppercase tracking-[0.2em] text-teal-200">
             Welcome back
           </p>
-          <h1 className="text-4xl font-bold leading-tight">Pick up where you left off.</h1>
+          <h1 className="text-4xl font-bold leading-tight text-slate-50">Pick up where you left off.</h1>
           <p className="text-lg text-slate-200/80 max-w-2xl">
             Access your templates, mappings, and previous batch jobs. Your workspace stays intact between sessions.
           </p>

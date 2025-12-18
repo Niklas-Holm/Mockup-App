@@ -3,8 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { Rnd } from "react-rnd";
 import { useAuth } from "../context/AuthContext";
 
-const API_BASE = "http://localhost:8000/api";
+const API_BASE = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) || "http://localhost:8000/api";
 const BACKEND_BASE = API_BASE.replace(/\/api$/, "");
+const DARKMODE_KEY = "mockupapp:darkmode";
 
 function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = false }) {
   const [localTemplate, setLocalTemplate] = useState(
@@ -164,7 +165,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
         try {
           const formData = new FormData();
           formData.append("mask", blob, "mask.png");
-          const res = await fetch(`${API_BASE}/templates/upload-mask`, { method: "POST", body: formData });
+          const res = await authFetch(`${API_BASE}/templates/upload-mask`, { method: "POST", body: formData });
           if (!res.ok) throw new Error("Upload failed");
           const data = await res.json();
           const updated = {
@@ -320,163 +321,165 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
           {maskError && <span className="text-xs text-red-600">{maskError}</span>}
         </div>
       )}
-      <div
-        className={`relative border ${darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"}`}
-        style={{
-          width: Math.min(bgSize.width, 900),
-          height: (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height,
-          backgroundImage: template?.baseImagePath
-            ? `url(${
-                template.baseImagePath.startsWith("http")
-                  ? template.baseImagePath
-                  : `${BACKEND_BASE}${template.baseImagePath.startsWith("/") ? "" : "/"}${template.baseImagePath}`
-              })`
-            : "none",
-          backgroundSize: "cover",
-          overflow: "hidden",
-        }}
-      >
-        <canvas
-          ref={maskCanvasRef}
+      <div className="w-full flex justify-center">
+        <div
+          className={`relative border ${darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"}`}
           style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
             width: Math.min(bgSize.width, 900),
             height: (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height,
-            pointerEvents: maskMode ? "auto" : "none",
-            cursor: maskMode ? "none" : "default",
-            zIndex: 4,
+            backgroundImage: template?.baseImagePath
+              ? `url(${
+                  template.baseImagePath.startsWith("http")
+                    ? template.baseImagePath
+                    : `${BACKEND_BASE}${template.baseImagePath.startsWith("/") ? "" : "/"}${template.baseImagePath}`
+                })`
+              : "none",
+            backgroundSize: "cover",
+            overflow: "hidden",
           }}
-          className="touch-none"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerLeave={handlePointerUp}
-        />
-        {maskMode && brushPreview && (
-          <div
+        >
+          <canvas
+            ref={maskCanvasRef}
             style={{
               position: "absolute",
-              top: brushPreview.y,
-              left: brushPreview.x,
-              width: brushSize * scale,
-              height: brushSize * scale,
-              border: `2px solid ${brushColor}`,
-              borderRadius: "9999px",
-              pointerEvents: "none",
-              transform: "translate(-50%, -50%)",
-              zIndex: 6,
-              boxShadow: "0 0 0 1px rgba(0,0,0,0.08)",
+              top: 0,
+              left: 0,
+              width: Math.min(bgSize.width, 900),
+              height: (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height,
+              pointerEvents: maskMode ? "auto" : "none",
+              cursor: maskMode ? "none" : "default",
+              zIndex: 4,
             }}
+            className="touch-none"
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerUp}
           />
-        )}
-        {localTemplate.variables.map((variable) => {
-          const scale = Math.min(bgSize.width, 900) / bgSize.width;
-          const w = variable.w * scale;
-          const h = variable.h * scale;
-          const x = variable.x * scale;
-          const y = variable.y * scale;
-          return (
-            <Rnd
-              key={variable.id}
-              size={{ width: w, height: h }}
-              position={{ x, y }}
-              disableDragging={maskMode}
-              enableResizing={!maskMode}
-              style={{ zIndex: 10, pointerEvents: maskMode ? "none" : "auto" }}
-              onDragStop={(_, data) =>
-                updateVar(
-                  variable.id,
-                  {
-                    x: Math.round(data.x / scale),
-                    y: Math.round(data.y / scale),
-                  },
-                  true
-                )
-              }
-              onResizeStop={(_, __, ref, ___, position) =>
-                updateVar(
-                  variable.id,
-                  {
-                    w: Math.round(ref.offsetWidth / scale),
-                    h: Math.round(ref.offsetHeight / scale),
-                    x: Math.round(position.x / scale),
-                    y: Math.round(position.y / scale),
-                  },
-                  true
-                )
-              }
-              bounds="parent"
-              onClick={() => setActiveVarId(variable.id)}
-              style={{ zIndex: 10 }}
-              className={`border-2 ${
-                activeVarId === variable.id ? "border-blue-500" : "border-orange-400"
-              } bg-orange-200/30`}
-            >
-              {variable.type === "text" ? (
-                <div className="w-full h-full relative overflow-hidden">
-                  <span className="absolute top-0 right-0 text-[10px] text-gray-600 px-1 pointer-events-none bg-white/70">
-                    {variable.label}
-                  </span>
-                  {(() => {
-                    const layout = getTextLayout(variable);
-                    return (
-                      <div
-                        className="absolute left-0"
-                        style={{
-                          top: layout.startY,
-                          width: "100%",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        {layout.lines.map((line, idx) => (
-                          <div
-                            key={`${line}-${idx}`}
-                            style={{
-                              color: layout.color,
-                              fontSize: `${layout.fontSize}px`,
-                              fontWeight: variable.style?.weight || "bold",
-                              textAlign: layout.align,
-                              lineHeight: `${layout.lineHeight}px`,
-                              width: "100%",
-                              whiteSpace: "pre-wrap",
-                              margin: 0,
-                              padding: 0,
-                              backgroundColor: "transparent",
-                            }}
-                          >
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                </div>
-              ) : (
-                <div className="w-full h-full relative overflow-hidden">
-                  <span className="absolute top-0 right-0 text-[10px] text-gray-600 px-1 pointer-events-none bg-white/70">
-                    {variable.label}
-                  </span>
-                  {(() => {
-                    const imgSrc = getPreviewValue(variable);
-                    return imgSrc ? (
-                      <img
-                        src={imgSrc}
-                        alt={variable.label}
-                        className="absolute inset-0 w-full h-full object-center"
-                        style={{ objectFit: variable.fit || "cover", pointerEvents: "none" }}
-                        onError={(e) => {
-                          e.currentTarget.style.display = "none";
-                        }}
-                      />
-                    ) : null;
-                  })()}
-                </div>
-              )}
-            </Rnd>
-          );
-        })}
+          {maskMode && brushPreview && (
+            <div
+              style={{
+                position: "absolute",
+                top: brushPreview.y,
+                left: brushPreview.x,
+                width: brushSize * scale,
+                height: brushSize * scale,
+                border: `2px solid ${brushColor}`,
+                borderRadius: "9999px",
+                pointerEvents: "none",
+                transform: "translate(-50%, -50%)",
+                zIndex: 6,
+                boxShadow: "0 0 0 1px rgba(0,0,0,0.08)",
+              }}
+            />
+          )}
+          {localTemplate.variables.map((variable) => {
+            const scale = Math.min(bgSize.width, 900) / bgSize.width;
+            const w = variable.w * scale;
+            const h = variable.h * scale;
+            const x = variable.x * scale;
+            const y = variable.y * scale;
+            return (
+              <Rnd
+                key={variable.id}
+                size={{ width: w, height: h }}
+                position={{ x, y }}
+                disableDragging={maskMode}
+                enableResizing={!maskMode}
+                style={{ zIndex: 10, pointerEvents: maskMode ? "none" : "auto" }}
+                onDragStop={(_, data) =>
+                  updateVar(
+                    variable.id,
+                    {
+                      x: Math.round(data.x / scale),
+                      y: Math.round(data.y / scale),
+                    },
+                    true
+                  )
+                }
+                onResizeStop={(_, __, ref, ___, position) =>
+                  updateVar(
+                    variable.id,
+                    {
+                      w: Math.round(ref.offsetWidth / scale),
+                      h: Math.round(ref.offsetHeight / scale),
+                      x: Math.round(position.x / scale),
+                      y: Math.round(position.y / scale),
+                    },
+                    true
+                  )
+                }
+                bounds="parent"
+                onClick={() => setActiveVarId(variable.id)}
+                style={{ zIndex: 10 }}
+                className={`border-2 ${
+                  activeVarId === variable.id ? "border-blue-500" : "border-orange-400"
+                } bg-orange-200/30`}
+              >
+                {variable.type === "text" ? (
+                  <div className="w-full h-full relative overflow-hidden">
+                    <span className="absolute top-0 right-0 text-[10px] text-gray-600 px-1 pointer-events-none bg-white/70">
+                      {variable.label}
+                    </span>
+                    {(() => {
+                      const layout = getTextLayout(variable);
+                      return (
+                        <div
+                          className="absolute left-0"
+                          style={{
+                            top: layout.startY,
+                            width: "100%",
+                            pointerEvents: "none",
+                          }}
+                        >
+                          {layout.lines.map((line, idx) => (
+                            <div
+                              key={`${line}-${idx}`}
+                              style={{
+                                color: layout.color,
+                                fontSize: `${layout.fontSize}px`,
+                                fontWeight: variable.style?.weight || "bold",
+                                textAlign: layout.align,
+                                lineHeight: `${layout.lineHeight}px`,
+                                width: "100%",
+                                whiteSpace: "pre-wrap",
+                                margin: 0,
+                                padding: 0,
+                                backgroundColor: "transparent",
+                              }}
+                            >
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  <div className="w-full h-full relative overflow-hidden">
+                    <span className="absolute top-0 right-0 text-[10px] text-gray-600 px-1 pointer-events-none bg-white/70">
+                      {variable.label}
+                    </span>
+                    {(() => {
+                      const imgSrc = getPreviewValue(variable);
+                      return imgSrc ? (
+                        <img
+                          src={imgSrc}
+                          alt={variable.label}
+                          className="absolute inset-0 w-full h-full object-center"
+                          style={{ objectFit: variable.fit || "cover", pointerEvents: "none" }}
+                          onError={(e) => {
+                            e.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : null;
+                    })()}
+                  </div>
+                )}
+              </Rnd>
+            );
+          })}
+        </div>
       </div>
       {activeVar && (
         <div className="grid grid-cols-2 gap-2 text-sm">
@@ -670,7 +673,10 @@ export default function AppPage() {
   });
   const [error, setError] = useState("");
   const [templateModalError, setTemplateModalError] = useState("");
-  const [darkMode, setDarkMode] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(DARKMODE_KEY) === "true";
+  });
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState("");
   const [newTemplateFile, setNewTemplateFile] = useState(null);
@@ -685,7 +691,7 @@ export default function AppPage() {
   const previewRef = React.useRef(null);
   const runRef = React.useRef(null);
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, logout, authFetch, token } = useAuth();
 
   const handleLogout = () => {
     logout();
@@ -722,7 +728,7 @@ export default function AppPage() {
   useEffect(() => {
     const fetchTemplates = async () => {
       try {
-        const res = await fetch(`${API_BASE}/templates`);
+        const res = await authFetch(`${API_BASE}/templates`);
         const data = await res.json();
         const normalized = (data.templates || []).map((tpl) => normalizeTemplate(tpl));
         setTemplates(normalized);
@@ -731,10 +737,11 @@ export default function AppPage() {
         }
       } catch (e) {
         console.error("Failed to load templates", e);
+        setError(e.message || "Could not load templates. Please sign in again.");
       }
     };
     fetchTemplates();
-  }, []);
+  }, [authFetch]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -742,6 +749,9 @@ export default function AppPage() {
       root.classList.add("dark");
     } else {
       root.classList.remove("dark");
+    }
+    if (typeof window !== "undefined") {
+      localStorage.setItem(DARKMODE_KEY, darkMode ? "true" : "false");
     }
     return () => {
       root.classList.remove("dark");
@@ -759,6 +769,16 @@ export default function AppPage() {
   const stepsBarPill = darkMode
     ? "px-2 py-1 rounded bg-slate-700 border border-slate-600 text-slate-100"
     : "px-2 py-1 rounded bg-slate-100 text-slate-800";
+  const previewCardClasses = darkMode
+    ? "border border-slate-700 rounded-lg p-2 bg-slate-800 text-left hover:ring-2 hover:ring-blue-500 transition focus:outline-none focus:ring-2 focus:ring-blue-500"
+    : "border rounded-lg p-2 bg-slate-50 text-left hover:ring-2 hover:ring-blue-300 transition focus:outline-none focus:ring-2 focus:ring-blue-400";
+  const previewCardText = darkMode ? "text-slate-200" : "text-slate-600";
+  const previewTableContainer = darkMode
+    ? "overflow-auto border border-slate-700 rounded bg-slate-800/60"
+    : "overflow-auto border rounded bg-white";
+  const previewTableHead = darkMode ? "bg-slate-900 text-slate-100" : "bg-slate-100 text-slate-900";
+  const previewTableRow = darkMode ? "odd:bg-slate-800 even:bg-slate-900/60 text-slate-100" : "odd:bg-white even:bg-slate-50";
+  const previewTableBorder = darkMode ? "border-slate-700" : "border-slate-200";
 
   const handleCsvUpload = async (file) => {
     setCsvFile(file);
@@ -768,7 +788,7 @@ export default function AppPage() {
     formData.append("csv_file", file);
     formData.append("sample_size", "5");
     try {
-      const res = await fetch(`${API_BASE}/csv/inspect`, { method: "POST", body: formData });
+      const res = await authFetch(`${API_BASE}/csv/inspect`, { method: "POST", body: formData });
       if (!res.ok) throw new Error("Failed to inspect CSV");
       const data = await res.json();
       const incomingHeaders = data.headers || [];
@@ -849,7 +869,7 @@ export default function AppPage() {
     formData.append("limit", "3");
     formData.append("csv_file", csvFile);
     try {
-      const res = await fetch(`${API_BASE}/preview`, { method: "POST", body: formData });
+      const res = await authFetch(`${API_BASE}/preview`, { method: "POST", body: formData });
       if (!res.ok) throw new Error("Preview failed");
       const data = await res.json();
       setPreviewItems(data.previews || []);
@@ -862,7 +882,7 @@ export default function AppPage() {
 
   const pollJob = async (id) => {
     try {
-      const res = await fetch(`${API_BASE}/jobs/${id}`);
+      const res = await authFetch(`${API_BASE}/jobs/${id}`);
       if (!res.ok) throw new Error("Failed to fetch job");
       const data = await res.json();
       setJobStatus(data);
@@ -879,6 +899,25 @@ export default function AppPage() {
       setActivePreview(null);
     }
   }, [previewItems, activePreview]);
+
+  const handleDownloadCsv = async () => {
+    if (!jobId) return;
+    try {
+      const res = await authFetch(`${API_BASE}/jobs/${jobId}/csv`);
+      if (!res.ok) throw new Error("Kunne ikke hente CSV");
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `job_${jobId}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    }
+  };
 
   const handleBatch = async () => {
     if (!csvFile || !currentTemplate) return;
@@ -899,7 +938,7 @@ export default function AppPage() {
       formData.append("identifier_column", identifierColumn);
     }
     try {
-      const res = await fetch(`${API_BASE}/batch`, { method: "POST", body: formData });
+      const res = await authFetch(`${API_BASE}/batch`, { method: "POST", body: formData });
       if (!res.ok) throw new Error("Batch start failed");
       const data = await res.json();
       setJobId(data.job_id);
@@ -915,7 +954,7 @@ export default function AppPage() {
     setLoading((prev) => ({ ...prev, saveTemplate: true }));
     try {
       const payload = normalizeTemplate(tpl);
-      const res = await fetch(`${API_BASE}/templates`, {
+      const res = await authFetch(`${API_BASE}/templates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -949,7 +988,7 @@ export default function AppPage() {
   const uploadTemplateImage = async (file) => {
     const formData = new FormData();
     formData.append("image", file);
-    const res = await fetch(`${API_BASE}/templates/upload-image`, { method: "POST", body: formData });
+    const res = await authFetch(`${API_BASE}/templates/upload-image`, { method: "POST", body: formData });
     if (!res.ok) throw new Error("Kunne ikke uploade mockup-billede");
     return res.json();
   };
@@ -1127,12 +1166,12 @@ export default function AppPage() {
             {sampleRows.length > 0 && (
               <div className="text-sm space-y-2">
                 <p className="font-semibold">CSV preview</p>
-                <div className="overflow-auto border rounded">
+                <div className={previewTableContainer}>
                   <table className="min-w-full text-xs">
-                    <thead className="bg-slate-100">
+                    <thead className={previewTableHead}>
                       <tr>
                         {headers.map((h) => (
-                          <th key={h} className="px-2 py-1 text-left border-b">
+                          <th key={h} className={`px-2 py-2 text-left border-b ${previewTableBorder}`}>
                             {h}
                           </th>
                         ))}
@@ -1140,9 +1179,9 @@ export default function AppPage() {
                     </thead>
                     <tbody>
                       {sampleRows.slice(0, 5).map((row, idx) => (
-                        <tr key={idx} className="odd:bg-white even:bg-slate-50">
+                        <tr key={idx} className={previewTableRow}>
                           {headers.map((h) => (
-                            <td key={`${idx}-${h}`} className="px-2 py-1 border-b whitespace-nowrap">
+                            <td key={`${idx}-${h}`} className={`px-2 py-2 border-b whitespace-nowrap ${previewTableBorder}`}>
                               {row[h]}
                             </td>
                           ))}
@@ -1466,14 +1505,13 @@ export default function AppPage() {
                 </div>
                 {jobStatus.status === "done" && jobId && (
                   <div className="flex flex-wrap gap-3 items-center">
-                    <a
+                    <button
+                      type="button"
                       className="text-blue-600 underline text-sm"
-                      href={`${API_BASE}/jobs/${jobId}/csv`}
-                      target="_blank"
-                      rel="noreferrer"
+                      onClick={handleDownloadCsv}
                     >
                       Download CSV
-                    </a>
+                    </button>
                     <span className="text-sm text-slate-500">
                       {jobStatus.results?.filter((r) => r.status === "done").length || 0} succeeded /{" "}
                       {jobStatus.results?.length || 0} total ·{" "}

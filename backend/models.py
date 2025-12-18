@@ -16,6 +16,7 @@ class Template(Base):
     overlays = Column(JSON, nullable=True)
     masks = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    owner_id = Column(String, nullable=True, index=True)
 
 
 class Job(Base):
@@ -32,6 +33,7 @@ class Job(Base):
     template_id = Column(String)
     skip_processed = Column(Boolean, default=False)
     identifier_column = Column(String)
+    owner_id = Column(String, nullable=True, index=True)
 
 
 class ProcessedCompany(Base):
@@ -39,4 +41,14 @@ class ProcessedCompany(Base):
 
     id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
     identifier = Column(String, unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
+    email = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=True)
+    hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)

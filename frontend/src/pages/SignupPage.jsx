@@ -15,13 +15,13 @@ export default function SignupPage() {
     }
   }, [navigate, user]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
     setSubmitting(true);
     try {
-      signup(form);
-      navigate("/app");
+      await signup(form);
+      navigate("/app", { replace: true });
     } catch (err) {
       setError(err.message || "Unable to sign up right now.");
     } finally {

@@ -7,18 +7,21 @@ import os
 import re
 import shutil
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Set
 
 import requests
 from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi import FastAPI
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, or_, text
 from sqlalchemy.orm import Session
 from PIL import Image, ImageColor, ImageDraw, ImageFont
+from jose import JWTError, jwt
+from passlib.context import CryptContext
 
 # Optional Cloudinary dependency
 try:
@@ -54,13 +57,18 @@ def load_env(path: str = ".env"):
 load_env()
 
 from db import Base, SessionLocal, engine, get_session  # noqa: E402
-from models import Job, ProcessedCompany, Template  # noqa: E402
+from models import Job, ProcessedCompany, Template, User  # noqa: E402
 
 CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
 CLOUD_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
 CLOUD_API_SECRET = os.getenv("CLOUDINARY_API_SECRET", "")
 PUBLIC_ID_PATTERN = os.getenv("PUBLIC_ID_PATTERN", "<template>-<row>-<uuid>")
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "mockups")
+SECRET_KEY = os.getenv("AUTH_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    SECRET_KEY = base64.urlsafe_b64encode(os.urandom(32)).decode("utf-8")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "4320"))  # 3 days by default
 
 if CLOUDINARY_AVAILABLE and CLOUD_NAME and CLOUD_API_KEY and CLOUD_API_SECRET:
     cloudinary.config(
@@ -85,6 +93,15 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "template")), name="static")
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+pwd_context = CryptContext(
+    schemes=["argon2"],
+    deprecated="auto",
+    argon2__memory_cost=15360,
+    argon2__time_cost=2,
+    argon2__parallelism=1,
+)
 
 
 # === Helpers ===
@@ -128,6 +145,8 @@ def run_migrations(engine):
                 conn.execute(text("ALTER TABLE templates ADD COLUMN masks JSONB DEFAULT '[]'::jsonb"))
             else:
                 conn.execute(text("ALTER TABLE templates ADD COLUMN masks JSON DEFAULT '[]'"))
+        if "owner_id" not in template_cols:
+            conn.execute(text("ALTER TABLE templates ADD COLUMN owner_id TEXT"))
 
         try:
             job_cols = {c["name"] for c in insp.get_columns("jobs")}
@@ -140,6 +159,58 @@ def run_migrations(engine):
                 conn.execute(text("ALTER TABLE jobs ADD COLUMN skip_processed BOOLEAN DEFAULT 0"))
         if "identifier_column" not in job_cols:
             conn.execute(text("ALTER TABLE jobs ADD COLUMN identifier_column TEXT"))
+        if "owner_id" not in job_cols:
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN owner_id TEXT"))
+
+
+def hash_password(password: str) -> str:
+    if not password or len(password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long.")
+    return pwd_context.hash(password)
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    if not password or not hashed:
+        return False
+    return pwd_context.verify(password, hashed)
+
+
+def create_access_token(user_id: str, expires_minutes: int = ACCESS_TOKEN_EXPIRE_MINUTES) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    payload = {"sub": user_id, "exp": expire, "iat": datetime.utcnow()}
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_user_id(token: str) -> Optional[str]:
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("sub")
+    except JWTError:
+        return None
+
+
+def user_to_dict(user: User) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    return db.query(User).filter(User.email == email.lower().strip()).first()
+
+
+async def require_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_session)) -> User:
+    user_id = decode_user_id(token)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or expired credentials.")
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired credentials.")
+    return user
+
 def resolve_template_image_path(path: str) -> str:
     """Return an absolute filesystem path for the template image."""
     # Already absolute and exists
@@ -482,6 +553,7 @@ def template_to_dict(tpl: Template) -> dict:
         "baseImagePath": tpl.base_image_path,
         "variables": tpl.variables or [],
         "masks": tpl.masks or [],
+        "ownerId": tpl.owner_id,
     }
 
 
@@ -498,6 +570,7 @@ def job_to_dict(job: Job) -> dict:
         "csv_path": job.csv_path,
         "skip_processed": bool(job.skip_processed),
         "identifier_column": job.identifier_column,
+        "ownerId": job.owner_id,
     }
 
 
@@ -703,26 +776,85 @@ async def seed_templates():
         session.close()
 
 
+@app.get("/api/auth/has-users")
+async def has_users(db: Session = Depends(get_session)):
+    has_users = db.query(User).first() is not None
+    return {"hasUsers": bool(has_users)}
+
+
+@app.post("/api/auth/signup")
+async def signup(payload: dict, db: Session = Depends(get_session)):
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    name = (payload.get("name") or "").strip()
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Email and password are required.")
+    if get_user_by_email(db, email):
+        raise HTTPException(status_code=400, detail="An account with that email already exists.")
+    hashed = hash_password(password)
+    user = User(email=email, name=name or email.split("@")[0], hashed_password=hashed)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    token = create_access_token(user.id)
+    return {"access_token": token, "token_type": "bearer", "user": user_to_dict(user)}
+
+
+@app.post("/api/auth/login")
+async def login(payload: dict, db: Session = Depends(get_session)):
+    email = (payload.get("email") or "").strip().lower()
+    password = payload.get("password") or ""
+    user = get_user_by_email(db, email)
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
+    token = create_access_token(user.id)
+    return {"access_token": token, "token_type": "bearer", "user": user_to_dict(user)}
+
+
+@app.get("/api/auth/me")
+async def read_current_user(current_user: User = Depends(require_user)):
+    return {"user": user_to_dict(current_user)}
+
+
 @app.get("/api/templates")
-async def list_templates(db: Session = Depends(get_session)):
-    templates = db.query(Template).all()
+async def list_templates(
+    current_user: User = Depends(require_user),
+    db: Session = Depends(get_session),
+):
+    templates = (
+        db.query(Template)
+        .filter(or_(Template.owner_id == current_user.id, Template.owner_id.is_(None)))
+        .all()
+    )
     return {"templates": [template_to_dict(t) for t in templates]}
 
 
 @app.get("/api/templates/{template_id}")
-async def get_template(template_id: str, db: Session = Depends(get_session)):
+async def get_template(
+    template_id: str,
+    current_user: User = Depends(require_user),
+    db: Session = Depends(get_session),
+):
     tpl = db.get(Template, template_id)
     if not tpl:
         raise HTTPException(status_code=404, detail="Template not found")
+    if tpl.owner_id and tpl.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this template.")
     return template_to_dict(tpl)
 
 
 @app.post("/api/templates")
-async def create_or_update_template(payload: dict, db: Session = Depends(get_session)):
+async def create_or_update_template(
+    payload: dict,
+    current_user: User = Depends(require_user),
+    db: Session = Depends(get_session),
+):
     tpl_id = payload.get("id") or uuid.uuid4().hex
     payload["id"] = tpl_id
     tpl = db.get(Template, tpl_id)
     if tpl:
+        if tpl.owner_id and tpl.owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You do not have access to this template.")
         tpl.name = payload.get("name", tpl.name)
         tpl.base_image_path = payload.get("baseImagePath", tpl.base_image_path)
         tpl.variables = payload.get("variables", tpl.variables)
@@ -734,6 +866,7 @@ async def create_or_update_template(payload: dict, db: Session = Depends(get_ses
             base_image_path=payload.get("baseImagePath", ""),
             variables=payload.get("variables", []),
             masks=payload.get("masks", []),
+            owner_id=current_user.id,
         )
         db.add(tpl)
     db.commit()
@@ -742,7 +875,10 @@ async def create_or_update_template(payload: dict, db: Session = Depends(get_ses
 
 
 @app.post("/api/templates/upload-image")
-async def upload_template_image(image: UploadFile = File(...)):
+async def upload_template_image(
+    image: UploadFile = File(...),
+    current_user: User = Depends(require_user),
+):
     if not image.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     ensure_upload_dir()
@@ -757,7 +893,10 @@ async def upload_template_image(image: UploadFile = File(...)):
 
 
 @app.post("/api/templates/upload-mask")
-async def upload_template_mask(mask: UploadFile = File(...)):
+async def upload_template_mask(
+    mask: UploadFile = File(...),
+    current_user: User = Depends(require_user),
+):
     if not mask.filename:
         raise HTTPException(status_code=400, detail="Missing filename")
     content_type = mask.content_type or "image/png"
@@ -772,7 +911,11 @@ async def upload_template_mask(mask: UploadFile = File(...)):
 
 
 @app.post("/api/csv/inspect")
-async def inspect_csv(csv_file: UploadFile = File(...), sample_size: int = Form(5)):
+async def inspect_csv(
+    csv_file: UploadFile = File(...),
+    sample_size: int = Form(5),
+    current_user: User = Depends(require_user),
+):
     rows = parse_csv_file(csv_file)
     headers = list(rows[0].keys()) if rows else []
     return {"headers": headers, "sample_rows": rows[:sample_size]}
@@ -784,6 +927,7 @@ async def preview_mockups(
     mapping: str = Form(...),
     limit: int = Form(3),
     csv_file: UploadFile = File(...),
+    current_user: User = Depends(require_user),
     db: Session = Depends(get_session),
 ):
     try:
@@ -793,6 +937,8 @@ async def preview_mockups(
     tpl_obj = db.get(Template, template_id)
     if not tpl_obj:
         raise HTTPException(status_code=404, detail="Template not found")
+    if tpl_obj.owner_id and tpl_obj.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this template.")
     tpl = template_to_dict(tpl_obj)
     rows = parse_csv_file(csv_file)
     previews = []
@@ -818,6 +964,7 @@ async def start_batch(
     csv_file: UploadFile = File(...),
     skip_processed: bool = Form(False),
     identifier_column: Optional[str] = Form(None),
+    current_user: User = Depends(require_user),
     db: Session = Depends(get_session),
 ):
     try:
@@ -827,6 +974,8 @@ async def start_batch(
     tpl_obj = db.get(Template, template_id)
     if not tpl_obj:
         raise HTTPException(status_code=404, detail="Template not found")
+    if tpl_obj.owner_id and tpl_obj.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this template.")
     tpl = template_to_dict(tpl_obj)
     rows = parse_csv_file(csv_file)
     if not rows:
@@ -844,6 +993,7 @@ async def start_batch(
         csv_path=None,
         skip_processed=bool(skip_processed),
         identifier_column=identifier_column,
+        owner_id=current_user.id,
     )
     db.add(job)
     db.commit()
@@ -854,18 +1004,30 @@ async def start_batch(
 
 
 @app.get("/api/jobs/{job_id}")
-async def job_status(job_id: str, db: Session = Depends(get_session)):
+async def job_status(
+    job_id: str,
+    current_user: User = Depends(require_user),
+    db: Session = Depends(get_session),
+):
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.owner_id and job.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this job.")
     return job_to_dict(job)
 
 
 @app.get("/api/jobs/{job_id}/csv")
-async def download_job_csv(job_id: str, db: Session = Depends(get_session)):
+async def download_job_csv(
+    job_id: str,
+    current_user: User = Depends(require_user),
+    db: Session = Depends(get_session),
+):
     job = db.get(Job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if job.owner_id and job.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this job.")
     if job.status != "done":
         raise HTTPException(status_code=400, detail="Job not finished")
     csv_path = job.csv_path

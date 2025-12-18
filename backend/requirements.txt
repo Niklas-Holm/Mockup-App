@@ -5,3 +5,6 @@ requests
 cloudinary
 sqlalchemy
 psycopg[binary]
+passlib[argon2]
+python-jose[cryptography]
+argon2-cffi
