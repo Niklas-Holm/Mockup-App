@@ -80,3 +80,8 @@ html {
 .dark .bg-slate-800\/90 {
     background-color: rgba(30, 41, 59, 0.9) !important;
 }
+
+/* Ensure all buttons show pointer on hover */
+button:hover {
+    cursor: pointer;
+}

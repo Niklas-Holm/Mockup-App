@@ -637,6 +637,7 @@ export default function AppPage() {
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [mapping, setMapping] = useState({});
   const [previewItems, setPreviewItems] = useState([]);
+  const [activePreview, setActivePreview] = useState(null);
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState(null);
   const [loading, setLoading] = useState({
@@ -844,6 +845,12 @@ export default function AppPage() {
       console.error(e);
     }
   };
+
+  useEffect(() => {
+    if (activePreview && !previewItems.find((p) => p.row === activePreview.row)) {
+      setActivePreview(null);
+    }
+  }, [previewItems, activePreview]);
 
   const handleBatch = async () => {
     if (!csvFile || !currentTemplate) return;
@@ -1347,14 +1354,20 @@ export default function AppPage() {
             {previewItems.length > 0 && (
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {previewItems.map((item) => (
-                  <div key={item.row} className="border rounded-lg p-2 bg-slate-50">
+                  <button
+                    key={item.row}
+                    type="button"
+                    className="border rounded-lg p-2 bg-slate-50 text-left hover:ring-2 hover:ring-blue-300 transition focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    onClick={() => setActivePreview(item)}
+                    aria-label={`Åbn preview for række ${item.row + 1}`}
+                  >
                     <img
                       src={`data:image/jpeg;base64,${item.image_base64}`}
                       alt={`Preview ${item.row}`}
                       className="w-full rounded"
                     />
                     <p className="text-xs text-slate-600 mt-1">Row {item.row + 1}</p>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -1469,6 +1482,47 @@ export default function AppPage() {
           </section>
         </div>
       </div>
+      {activePreview && (
+        <div
+          className="fixed inset-0 bg-black/70 z-40 flex items-center justify-center p-4"
+          onClick={() => setActivePreview(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className={`w-full max-w-5xl max-h-[90vh] rounded-xl shadow-2xl overflow-hidden ${
+              darkMode ? "bg-slate-900 text-white" : "bg-white"
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              className={`flex items-center justify-between px-4 py-3 border-b ${
+                darkMode ? "border-slate-700" : "border-slate-200"
+              }`}
+            >
+              <div className="space-y-0.5">
+                <p className="text-sm font-semibold">Preview for row {activePreview.row + 1}</p>
+                <p className="text-xs text-slate-500">
+                  Klik udenfor billedet eller på luk for at gå tilbage.
+                </p>
+              </div>
+              <button
+                className="px-3 py-1 rounded border text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
+                onClick={() => setActivePreview(null)}
+              >
+                Luk
+              </button>
+            </div>
+            <div className={`p-3 flex items-center justify-center ${darkMode ? "bg-slate-950" : "bg-slate-50"}`}>
+              <img
+                src={`data:image/jpeg;base64,${activePreview.image_base64}`}
+                alt={`Preview for row ${activePreview.row + 1}`}
+                className="w-full max-h-[80vh] object-contain rounded"
+              />
+            </div>
+          </div>
+        </div>
+      )}
       {showTemplateModal && (
         <div className="fixed inset-0 bg-black/50 z-30 flex items-center justify-center p-4">
           <div className={`${cardClasses} w-full max-w-lg rounded-xl shadow-lg p-5 space-y-4`}>
