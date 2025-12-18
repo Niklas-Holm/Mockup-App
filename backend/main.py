@@ -15,13 +15,14 @@ from fastapi import Depends, File, Form, HTTPException, UploadFile
 from fastapi import FastAPI
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, or_, text
 from sqlalchemy.orm import Session
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from openpyxl import load_workbook
 
 # Optional Cloudinary dependency
 try:
@@ -33,7 +34,6 @@ except ImportError:
     CLOUDINARY_AVAILABLE = False
 
 BASE_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(BASE_DIR, "generated")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 UPLOADS_TEMPLATE_DIR = os.path.join(UPLOADS_DIR, "templates")
 UPLOADS_MASK_DIR = os.path.join(UPLOADS_DIR, "masks")
@@ -113,11 +113,6 @@ def shorten_company_name(name: str) -> str:
     cleaned = " ".join(words)
     cleaned = re.sub(r"[^a-zA-Z0-9 ]+", "", cleaned).strip()
     return " ".join(word.capitalize() for word in cleaned.split())
-
-
-def ensure_data_dir():
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR, exist_ok=True)
 
 
 def ensure_upload_dir():
@@ -650,6 +645,25 @@ def upload_to_cloudinary(image: Image.Image, template_id: str, row_index: int, r
 def parse_csv_file(file: UploadFile) -> List[dict]:
     content = file.file.read()
     file.file.seek(0)
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+    is_excel = filename.endswith((".xlsx", ".xls")) or "excel" in content_type or "spreadsheetml" in content_type
+
+    if is_excel:
+        wb = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return []
+        headers = []
+        for idx, cell in enumerate(rows[0]):
+            header = str(cell).strip() if cell not in (None, "") else f"column_{idx + 1}"
+            headers.append(header)
+        data_rows = []
+        for row_values in rows[1:]:
+            data_rows.append({headers[i]: (row_values[i] if row_values and i < len(row_values) else "") for i in range(len(headers))})
+        return data_rows
+
     try:
         text = content.decode("utf-8-sig")
     except Exception:
@@ -680,7 +694,6 @@ async def run_job(
     skip_processed: bool = False,
     identifier_column: Optional[str] = None,
 ):
-    ensure_data_dir()
     session = SessionLocal()
     job = session.get(Job, job_id)
     if not job:
@@ -732,13 +745,10 @@ async def run_job(
         session.add(job)
         session.commit()
 
-    csv_text = serialize_rows_to_csv(job.rows or [], mockup_column)
-    csv_path = os.path.join(DATA_DIR, f"job_{job_id}.csv")
-    with open(csv_path, "w", encoding="utf-8") as f:
-        f.write(csv_text)
-
+    # Ensure DB has the latest rows including mockup URLs
+    job.rows = stored_rows
     job.status = "done"
-    job.csv_path = csv_path
+    job.csv_path = None
     session.add(job)
     session.commit()
     session.close()
@@ -1030,7 +1040,15 @@ async def download_job_csv(
         raise HTTPException(status_code=403, detail="You do not have access to this job.")
     if job.status != "done":
         raise HTTPException(status_code=400, detail="Job not finished")
-    csv_path = job.csv_path
-    if not csv_path or not os.path.exists(csv_path):
-        raise HTTPException(status_code=404, detail="CSV not found")
-    return FileResponse(csv_path, media_type="text/csv", filename=os.path.basename(csv_path))
+    rows = job.rows or []
+    # Fill in mockup URLs from results if rows are missing them
+    for res in job.results or []:
+        if res.get("status") == "done":
+            row_idx = res.get("row")
+            url = res.get("url")
+            if row_idx is not None and url and row_idx < len(rows):
+                rows[row_idx]["mockup_url"] = url
+    csv_text = serialize_rows_to_csv(rows)
+    filename = f"job_{job_id}.csv"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=csv_text, media_type="text/csv", headers=headers)

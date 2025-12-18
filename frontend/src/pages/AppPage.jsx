@@ -217,7 +217,8 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
   };
 
   const getTextLayout = (variable) => {
-    const text = getPreviewValue(variable) || "Sample";
+    const rawValue = getPreviewValue(variable);
+    const text = rawValue == null ? "Sample" : String(rawValue);
     const fontSize = (variable.style?.size || 14) * scale;
     const fontWeight = variable.style?.weight || "bold";
     const align = variable.style?.align || "left";
@@ -779,6 +780,8 @@ export default function AppPage() {
   const previewTableHead = darkMode ? "bg-slate-900 text-slate-100" : "bg-slate-100 text-slate-900";
   const previewTableRow = darkMode ? "odd:bg-slate-800 even:bg-slate-900/60 text-slate-100" : "odd:bg-white even:bg-slate-50";
   const previewTableBorder = darkMode ? "border-slate-700" : "border-slate-200";
+  const progressBarBg = darkMode ? "bg-slate-800" : "bg-slate-100";
+  const progressPulse = darkMode ? "bg-blue-400" : "bg-blue-500";
 
   const handleCsvUpload = async (file) => {
     setCsvFile(file);
@@ -925,7 +928,12 @@ export default function AppPage() {
       setError("Vælg en identifier-kolonne for at kunne springe eksisterende virksomheder over.");
       return;
     }
-    setJobStatus(null);
+    setJobStatus({
+      status: "starting",
+      progress: 0,
+      results: [],
+      id: jobId,
+    });
     setJobId(null);
     setLoading((prev) => ({ ...prev, batch: true }));
     setError("");
@@ -942,9 +950,18 @@ export default function AppPage() {
       if (!res.ok) throw new Error("Batch start failed");
       const data = await res.json();
       setJobId(data.job_id);
+      setJobStatus((prev) => ({
+        ...(prev || {}),
+        status: "running",
+        progress: 0,
+        results: [],
+        id: data.job_id,
+      }));
+      // Trigger immediate poll so the user sees progress right away
       pollJob(data.job_id);
     } catch (e) {
       setError(e.message);
+      setJobStatus(null);
     } finally {
       setLoading((prev) => ({ ...prev, batch: false }));
     }
@@ -1140,12 +1157,12 @@ export default function AppPage() {
                 className="border-2 border-dashed border-slate-300 rounded-lg bg-slate-50 hover:border-blue-400 transition p-4 cursor-pointer flex flex-col gap-2"
                 htmlFor="csv-input"
               >
-              <span className="text-sm font-semibold">{csvFile ? csvFile.name : "Drop or select a CSV"}</span>
+              <span className="text-sm font-semibold">{csvFile ? csvFile.name : "Drop or select a CSV or Excel"}</span>
               <span className="text-xs text-slate-500">We only read it locally; nothing is sent until you run.</span>
               <input
                 id="csv-input"
                 type="file"
-                accept=".csv"
+                accept=".csv,.xlsx,.xls"
                 className="hidden"
                 onChange={(e) => e.target.files?.[0] && handleCsvUpload(e.target.files[0])}
               />
@@ -1491,34 +1508,48 @@ export default function AppPage() {
             </div>
             {jobStatus && (
               <div className="space-y-3">
-                <div className="flex items-center justify-between text-sm">
-                  <span>
-                    Status: <span className="font-semibold">{jobStatus.status}</span>
-                  </span>
-                  <span>{jobStatus.progress}%</span>
-                </div>
-                <div className="w-full bg-slate-100 rounded h-2">
-                  <div
-                    className="bg-green-500 h-2 rounded"
-                    style={{ width: `${jobStatus.progress || 0}%` }}
-                  ></div>
-                </div>
-                {jobStatus.status === "done" && jobId && (
-                  <div className="flex flex-wrap gap-3 items-center">
-                    <button
-                      type="button"
-                      className="text-blue-600 underline text-sm"
-                      onClick={handleDownloadCsv}
-                    >
-                      Download CSV
-                    </button>
+                {jobStatus.status !== "done" && (
+                  <>
+                    <div className="flex items-center justify-between text-sm flex-wrap gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-2 px-2 py-1 rounded-full bg-blue-50 text-blue-700 dark:bg-slate-800 dark:text-blue-200">
+                          <span className="h-2 w-2 rounded-full bg-blue-500 animate-ping" />
+                          <span className="text-xs font-semibold">Generating mockups...</span>
+                        </span>
+                        <span>
+                          Status: <span className="font-semibold capitalize">{jobStatus.status}</span>
+                        </span>
+                      </div>
+                      <span className="text-xs font-semibold">{jobStatus.progress}%</span>
+                    </div>
+                    <div className={`w-full ${progressBarBg} rounded h-2 overflow-hidden`}>
+                      <div
+                        className={`${progressPulse} animate-pulse h-2 rounded`}
+                        style={{ width: `${jobStatus.progress || 0}%` }}
+                      />
+                    </div>
+                  </>
+                )}
+                <div className="flex flex-wrap gap-3 items-center">
+                  <button
+                    type="button"
+                    className="text-blue-600 underline text-sm disabled:text-slate-400"
+                    onClick={handleDownloadCsv}
+                    disabled={!jobId || jobStatus.status !== "done"}
+                  >
+                    Download CSV
+                  </button>
+                  {jobStatus.status !== "done" && (
+                    <span className={`text-sm ${subText}`}>Download enabled when the run finishes.</span>
+                  )}
+                  {jobStatus.status === "done" && (
                     <span className="text-sm text-slate-500">
                       {jobStatus.results?.filter((r) => r.status === "done").length || 0} succeeded /{" "}
                       {jobStatus.results?.length || 0} total ·{" "}
                       {(jobStatus.results || []).filter((r) => r.status === "skipped").length || 0} skipped
                     </span>
-                  </div>
-                )}
+                  )}
+                </div>
                 <div className="grid sm:grid-cols-2 gap-2 max-h-64 overflow-auto">
                   {jobStatus.results?.map((r) => (
                     <div key={r.row} className="border rounded p-2 text-sm bg-slate-50">
