@@ -14,6 +14,7 @@ class Template(Base):
     base_image_path = Column(Text, nullable=False)
     variables = Column(JSON, nullable=False)
     overlays = Column(JSON, nullable=True)
+    masks = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

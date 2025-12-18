@@ -8,32 +8,38 @@ const BACKEND_BASE = API_BASE.replace(/\/api$/, "");
 
 function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = false }) {
   const [localTemplate, setLocalTemplate] = useState(
-    template ? { ...template, overlays: template.overlays || [], variables: template.variables || [] } : template
+    template ? { ...template, variables: template.variables || [], masks: template.masks || [] } : template
   );
   const [activeVarId, setActiveVarId] = useState(template?.variables?.[0]?.id || null);
-  const [activeOverlayId, setActiveOverlayId] = useState(template?.overlays?.[0]?.id || null);
   const [editingVarId, setEditingVarId] = useState(null);
   const [editingVarLabel, setEditingVarLabel] = useState("");
   const [bgSize, setBgSize] = useState({ width: 1200, height: 700 });
+  const [maskMode, setMaskMode] = useState(false);
+  const [brushColor, setBrushColor] = useState("#ffffff");
+  const [brushSize, setBrushSize] = useState(40);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [maskSaving, setMaskSaving] = useState(false);
+  const [maskError, setMaskError] = useState("");
+  const [brushPreview, setBrushPreview] = useState(null);
   const containerWidth = Math.min(bgSize.width, 900);
   const scale = containerWidth / bgSize.width;
+  const maskCanvasRef = React.useRef(null);
 
   useEffect(() => {
     if (!template) {
       setLocalTemplate(null);
       setActiveVarId(null);
-      setActiveOverlayId(null);
       return;
     }
-    const normalizedTemplate = { ...template, overlays: template.overlays || [], variables: template.variables || [] };
+    const normalizedTemplate = {
+      ...template,
+      variables: template.variables || [],
+      masks: template.masks || [],
+    };
     setLocalTemplate(normalizedTemplate);
     setActiveVarId((prev) => {
       if (prev && normalizedTemplate.variables.some((v) => v.id === prev)) return prev;
       return normalizedTemplate.variables[0]?.id || null;
-    });
-    setActiveOverlayId((prev) => {
-      if (prev && (normalizedTemplate.overlays || []).some((o) => o.id === prev)) return prev;
-      return (normalizedTemplate.overlays || [])[0]?.id || null;
     });
     setEditingVarId(null);
     setEditingVarLabel("");
@@ -51,10 +57,146 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
     img.src = src;
   }, [template?.baseImagePath]);
 
+  const resolveAsset = (path) => {
+    if (!path) return "";
+    if (path.startsWith("data:")) return path;
+    return path.startsWith("http") ? path : `${BACKEND_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
+  };
+
+  const clearMaskCanvas = (persist = false) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (persist) {
+      const updated = { ...localTemplate, masks: [] };
+      setLocalTemplate(updated);
+      onSave(updated);
+    }
+  };
+
+  useEffect(() => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    canvas.width = bgSize.width;
+    canvas.height = bgSize.height;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const maskEntry = (localTemplate?.masks || [])[0];
+    const maskSource =
+      typeof maskEntry === "string" ? maskEntry : maskEntry?.data || maskEntry?.path;
+    if (!maskSource) {
+      setMaskError("");
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      setMaskError("");
+    };
+    img.onerror = () => setMaskError("Kunne ikke indlæse masken");
+    img.src = resolveAsset(maskSource);
+  }, [localTemplate?.masks, bgSize.width, bgSize.height]);
+
+  useEffect(() => {
+    if (!maskMode) {
+      setBrushPreview(null);
+      setIsDrawing(false);
+    }
+  }, [maskMode]);
+
+  const pointerToCanvas = (event) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (event.clientX - rect.left) * scaleX;
+    const y = (event.clientY - rect.top) * scaleY;
+    return { x, y };
+  };
+
+  const drawPoint = (event) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    const point = pointerToCanvas(event);
+    if (!point) return;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = brushColor;
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, brushSize / 2, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  const handlePointerDown = (event) => {
+    if (!maskMode) return;
+    setIsDrawing(true);
+    updateBrushPreview(event);
+    drawPoint(event);
+  };
+
+  const handlePointerMove = (event) => {
+    if (!maskMode) return;
+    updateBrushPreview(event);
+    if (!isDrawing) return;
+    drawPoint(event);
+  };
+
+  const handlePointerUp = () => {
+    setIsDrawing(false);
+    setBrushPreview(null);
+  };
+
+  const handleSaveMask = () => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    setMaskSaving(true);
+    setMaskError("");
+    canvas.toBlob(
+      async (blob) => {
+        if (!blob) {
+          setMaskSaving(false);
+          setMaskError("Kunne ikke gemme masken.");
+          return;
+        }
+        try {
+          const formData = new FormData();
+          formData.append("mask", blob, "mask.png");
+          const res = await fetch(`${API_BASE}/templates/upload-mask`, { method: "POST", body: formData });
+          if (!res.ok) throw new Error("Upload failed");
+          const data = await res.json();
+          const updated = {
+            ...localTemplate,
+            masks: [{ id: "mask", data: data.data || data.path }],
+          };
+          setLocalTemplate(updated);
+          onSave(updated);
+          setMaskMode(false);
+        } catch (e) {
+          setMaskError(e.message || "Fejl ved upload af masken");
+        } finally {
+          setMaskSaving(false);
+        }
+      },
+      "image/png",
+      1
+    );
+  };
+
+  const updateBrushPreview = (event) => {
+    const canvas = maskCanvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = rect.width / canvas.width;
+    const point = pointerToCanvas(event);
+    if (!point) return;
+    setBrushPreview({ x: point.x * scaleX, y: point.y * scaleX });
+  };
+
   if (!localTemplate) return null;
   const activeVar = localTemplate.variables.find((v) => v.id === activeVarId);
-  const activeOverlay = (localTemplate.overlays || []).find((o) => o.id === activeOverlayId);
-
   const updateVar = (id, changes, save = false) => {
     const updated = {
       ...localTemplate,
@@ -64,44 +206,6 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
     if (save) {
       onSave(updated);
     }
-  };
-
-  const updateOverlay = (id, changes, save = false) => {
-    const updated = {
-      ...localTemplate,
-      overlays: (localTemplate.overlays || []).map((o) => (o.id === id ? { ...o, ...changes } : o)),
-    };
-    setLocalTemplate(updated);
-    if (save) {
-      onSave(updated);
-    }
-  };
-
-  const addOverlay = () => {
-    const newOverlay = {
-      id: `overlay_${Date.now()}`,
-      label: "Logo cover",
-      x: 80,
-      y: 80,
-      w: 200,
-      h: 120,
-      color: "#ffffff",
-      opacity: 0.9,
-    };
-    const updated = { ...localTemplate, overlays: [...(localTemplate.overlays || []), newOverlay] };
-    setLocalTemplate(updated);
-    setActiveOverlayId(newOverlay.id);
-    onSave(updated);
-  };
-
-  const removeOverlay = (id) => {
-    const filtered = (localTemplate.overlays || []).filter((o) => o.id !== id);
-    const updated = { ...localTemplate, overlays: filtered };
-    setLocalTemplate(updated);
-    if (activeOverlayId === id) {
-      setActiveOverlayId(filtered[0]?.id || null);
-    }
-    onSave(updated);
   };
 
   const getPreviewValue = (variable) => {
@@ -155,11 +259,12 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
         <h3 className="font-semibold">Placement Editor</h3>
         <div className="flex gap-2">
           <button
-            className="px-3 py-1 rounded bg-orange-500 text-white text-sm cursor-pointer"
-            onClick={addOverlay}
-            disabled={!localTemplate}
+            className={`px-3 py-1 rounded text-sm cursor-pointer border ${
+              maskMode ? "bg-blue-50 text-blue-700 border-blue-400" : "bg-white text-slate-700 border-slate-200"
+            }`}
+            onClick={() => setMaskMode((v) => !v)}
           >
-            Cover logo area
+            Mask brush
           </button>
           <button
             className="px-3 py-1 rounded bg-blue-600 text-white text-sm cursor-pointer"
@@ -169,6 +274,52 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
           </button>
         </div>
       </div>
+      {maskMode && (
+        <div className="flex flex-wrap items-center gap-3 text-sm border rounded-lg px-3 py-2 bg-white/80 dark:bg-slate-900/60">
+          <label className="flex items-center gap-2">
+            Farve
+            <input type="color" value={brushColor} onChange={(e) => setBrushColor(e.target.value)} />
+          </label>
+          <label className="flex items-center gap-2">
+            Brush størrelse
+            <input
+              type="range"
+              min="5"
+              max="120"
+              step="1"
+              value={brushSize}
+              onChange={(e) => setBrushSize(Number(e.target.value))}
+            />
+            <span className="text-xs text-slate-500 w-10">{brushSize}px</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-1 text-xs rounded border bg-white hover:bg-slate-50"
+              onClick={() => clearMaskCanvas()}
+            >
+              Ryd tegning
+            </button>
+            <button
+              className="px-3 py-1 text-xs rounded border bg-white hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400"
+              onClick={() => {
+                clearMaskCanvas(true);
+                setMaskMode(false);
+              }}
+              disabled={!localTemplate?.masks?.length}
+            >
+              Fjern gemt mask
+            </button>
+            <button
+              className="px-3 py-1 text-xs rounded bg-blue-600 text-white disabled:bg-slate-400"
+              onClick={handleSaveMask}
+              disabled={maskSaving}
+            >
+              {maskSaving ? "Gemmer..." : "Gem mask"}
+            </button>
+          </div>
+          {maskError && <span className="text-xs text-red-600">{maskError}</span>}
+        </div>
+      )}
       <div
         className={`relative border ${darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"}`}
         style={{
@@ -185,52 +336,41 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
           overflow: "hidden",
         }}
       >
-        {(localTemplate.overlays || []).map((overlay) => {
-          const scaleVal = Math.min(bgSize.width, 900) / bgSize.width;
-          const w = overlay.w * scaleVal;
-          const h = overlay.h * scaleVal;
-          const x = overlay.x * scaleVal;
-          const y = overlay.y * scaleVal;
-          return (
-            <Rnd
-              key={overlay.id}
-              size={{ width: w, height: h }}
-              position={{ x, y }}
-              bounds="parent"
-              style={{ zIndex: 5 }}
-              onDragStop={(_, data) =>
-                updateOverlay(
-                  overlay.id,
-                  { x: Math.round(data.x / scaleVal), y: Math.round(data.y / scaleVal) },
-                  true
-                )
-              }
-              onResizeStop={(_, __, ref, ___, position) =>
-                updateOverlay(
-                  overlay.id,
-                  {
-                    w: Math.round(ref.offsetWidth / scaleVal),
-                    h: Math.round(ref.offsetHeight / scaleVal),
-                    x: Math.round(position.x / scaleVal),
-                    y: Math.round(position.y / scaleVal),
-                  },
-                  true
-                )
-              }
-              onClick={() => {
-                setActiveOverlayId(overlay.id);
-                setActiveVarId(null);
-              }}
-              className={`border-2 ${
-                activeOverlayId === overlay.id ? "border-blue-400" : "border-sky-300"
-              } bg-blue-300/25`}
-            >
-              <div className="absolute top-0 left-0 text-[10px] px-1 bg-white/70 text-slate-700 pointer-events-none">
-                {overlay.label || "Logo cover"}
-              </div>
-            </Rnd>
-          );
-        })}
+        <canvas
+          ref={maskCanvasRef}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: Math.min(bgSize.width, 900),
+            height: (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height,
+            pointerEvents: maskMode ? "auto" : "none",
+            cursor: maskMode ? "none" : "default",
+            zIndex: 4,
+          }}
+          className="touch-none"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerUp}
+        />
+        {maskMode && brushPreview && (
+          <div
+            style={{
+              position: "absolute",
+              top: brushPreview.y,
+              left: brushPreview.x,
+              width: brushSize * scale,
+              height: brushSize * scale,
+              border: `2px solid ${brushColor}`,
+              borderRadius: "9999px",
+              pointerEvents: "none",
+              transform: "translate(-50%, -50%)",
+              zIndex: 6,
+              boxShadow: "0 0 0 1px rgba(0,0,0,0.08)",
+            }}
+          />
+        )}
         {localTemplate.variables.map((variable) => {
           const scale = Math.min(bgSize.width, 900) / bgSize.width;
           const w = variable.w * scale;
@@ -242,6 +382,9 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
               key={variable.id}
               size={{ width: w, height: h }}
               position={{ x, y }}
+              disableDragging={maskMode}
+              enableResizing={!maskMode}
+              style={{ zIndex: 10, pointerEvents: maskMode ? "none" : "auto" }}
               onDragStop={(_, data) =>
                 updateVar(
                   variable.id,
@@ -502,129 +645,6 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
           )}
         </div>
       )}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold">Logo cover overlays</p>
-            <p className="text-xs text-slate-500">Dæk eksisterende logoer med et felt og placer dit eget ovenpå.</p>
-          </div>
-          <button
-            className="px-3 py-1 text-xs rounded border border-blue-200 bg-blue-50 text-blue-700"
-            onClick={addOverlay}
-            disabled={!localTemplate}
-          >
-            + Tilføj overlay
-          </button>
-        </div>
-        {(localTemplate?.overlays || []).length === 0 && (
-          <p className="text-xs text-slate-500">Ingen overlays endnu. Brug knappen ovenfor for at male over eksisterende logoer.</p>
-        )}
-        {(localTemplate?.overlays || []).length > 0 && (
-          <div className="flex flex-col gap-2">
-            {(localTemplate.overlays || []).map((overlay) => (
-              <div
-                key={overlay.id}
-                className={`flex items-center justify-between gap-3 border rounded px-2 py-2 text-sm ${
-                  activeOverlayId === overlay.id ? "border-blue-500" : "border-slate-200"
-                }`}
-              >
-                <div className="flex flex-col">
-                  <span className="font-semibold">{overlay.label || "Overlay"}</span>
-                  <span className="text-xs text-slate-500">({overlay.w} x {overlay.h})</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="text-xs underline text-blue-600"
-                    onClick={() => {
-                      setActiveOverlayId(overlay.id);
-                      setActiveVarId(null);
-                    }}
-                  >
-                    Rediger
-                  </button>
-                  <button className="text-xs underline text-red-600" onClick={() => removeOverlay(overlay.id)}>
-                    Fjern
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        {activeOverlay && (
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div className="col-span-2 font-semibold flex items-center justify-between">
-              <span>{activeOverlay.label || "Overlay"}</span>
-              <label className="flex items-center gap-2 text-xs">
-                Navn
-                <input
-                  type="text"
-                  className="border rounded px-2 py-1"
-                  value={activeOverlay.label || ""}
-                  onChange={(e) => updateOverlay(activeOverlay.id, { label: e.target.value }, true)}
-                />
-              </label>
-            </div>
-            <label className="flex flex-col gap-1">
-              X
-              <input
-                type="number"
-                className="border rounded px-2 py-1"
-                value={activeOverlay.x}
-                onChange={(e) => updateOverlay(activeOverlay.id, { x: Number(e.target.value) }, true)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Y
-              <input
-                type="number"
-                className="border rounded px-2 py-1"
-                value={activeOverlay.y}
-                onChange={(e) => updateOverlay(activeOverlay.id, { y: Number(e.target.value) }, true)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Width
-              <input
-                type="number"
-                className="border rounded px-2 py-1"
-                value={activeOverlay.w}
-                onChange={(e) => updateOverlay(activeOverlay.id, { w: Number(e.target.value) }, true)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Height
-              <input
-                type="number"
-                className="border rounded px-2 py-1"
-                value={activeOverlay.h}
-                onChange={(e) => updateOverlay(activeOverlay.id, { h: Number(e.target.value) }, true)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Farve
-              <input
-                type="color"
-                className="border rounded px-2 py-1 h-10"
-                value={activeOverlay.color || "#ffffff"}
-                onChange={(e) => updateOverlay(activeOverlay.id, { color: e.target.value }, true)}
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              Opacitet
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                className="w-full"
-                value={activeOverlay.opacity ?? 0.9}
-                onChange={(e) => updateOverlay(activeOverlay.id, { opacity: Number(e.target.value) }, true)}
-              />
-              <span className="text-xs text-slate-500">{Math.round((activeOverlay.opacity ?? 0.9) * 100)}%</span>
-            </label>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -672,7 +692,10 @@ export default function AppPage() {
     navigate("/");
   };
 
-  const normalizeTemplate = (tpl) => (tpl ? { ...tpl, overlays: tpl.overlays || [], variables: tpl.variables || [] } : tpl);
+  const normalizeTemplate = (tpl) =>
+    tpl
+      ? { ...tpl, variables: tpl.variables || [], masks: tpl.masks || [] }
+      : tpl;
   const resolveImageUrl = (path) => {
     if (!path) return "";
     return path.startsWith("http")
@@ -939,7 +962,7 @@ export default function AppPage() {
         id: `tpl_${Date.now()}`,
         name: newTemplateName,
         baseImagePath: uploadRes.path,
-        overlays: [],
+        masks: [],
         variables: [],
       });
       const saved = await handleTemplateSave(freshTemplate);

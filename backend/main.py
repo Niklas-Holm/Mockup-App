@@ -33,6 +33,7 @@ BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, "generated")
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 UPLOADS_TEMPLATE_DIR = os.path.join(UPLOADS_DIR, "templates")
+UPLOADS_MASK_DIR = os.path.join(UPLOADS_DIR, "masks")
 
 
 def load_env(path: str = ".env"):
@@ -105,6 +106,8 @@ def ensure_data_dir():
 def ensure_upload_dir():
     if not os.path.exists(UPLOADS_TEMPLATE_DIR):
         os.makedirs(UPLOADS_TEMPLATE_DIR, exist_ok=True)
+    if not os.path.exists(UPLOADS_MASK_DIR):
+        os.makedirs(UPLOADS_MASK_DIR, exist_ok=True)
 
 
 def run_migrations(engine):
@@ -120,6 +123,11 @@ def run_migrations(engine):
                 conn.execute(text("ALTER TABLE templates ADD COLUMN overlays JSONB DEFAULT '[]'::jsonb"))
             else:
                 conn.execute(text("ALTER TABLE templates ADD COLUMN overlays JSON DEFAULT '[]'"))
+        if "masks" not in template_cols:
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE templates ADD COLUMN masks JSONB DEFAULT '[]'::jsonb"))
+            else:
+                conn.execute(text("ALTER TABLE templates ADD COLUMN masks JSON DEFAULT '[]'"))
 
         try:
             job_cols = {c["name"] for c in insp.get_columns("jobs")}
@@ -155,6 +163,7 @@ def default_template():
         "name": "Default Mockup",
         "baseImagePath": "/static/mockup-template.jpg",
         "overlays": [],
+        "masks": [],
         "variables": [
             {
                 "id": "short_name",
@@ -212,6 +221,7 @@ def roofing_template():
         "name": "Roofing Mockup",
         "baseImagePath": "/static/roofing-template.jpg",
         "overlays": [],
+        "masks": [],
         "variables": [
             {
                 "id": "short_name",
@@ -269,6 +279,7 @@ def plumber_template():
         "name": "Plumber Mockup",
         "baseImagePath": "/static/plumber-template-1.png",
         "overlays": [],
+        "masks": [],
         "variables": [
             {
                 "id": "short_name",
@@ -409,6 +420,34 @@ def load_image_from_value(value: str) -> Optional[Image.Image]:
     return None
 
 
+def load_mask_image(mask_entry) -> Optional[Image.Image]:
+    """Return a mask image from either inline base64 data or a stored path."""
+    data_value = None
+    path_value = None
+    if isinstance(mask_entry, dict):
+        data_value = mask_entry.get("data")
+        path_value = mask_entry.get("path")
+    else:
+        path_value = mask_entry
+
+    if data_value:
+        try:
+            _, b64data = data_value.split(",", 1)
+            binary = base64.b64decode(b64data)
+            return Image.open(io.BytesIO(binary)).convert("RGBA")
+        except Exception:
+            return None
+
+    if path_value:
+        resolved = resolve_template_image_path(path_value)
+        if os.path.exists(resolved):
+            try:
+                return Image.open(resolved).convert("RGBA")
+            except Exception:
+                return None
+    return None
+
+
 def paste_image(draw_image: Image.Image, variable: dict, value: str):
     img = load_image_from_value(value)
     if not img:
@@ -441,8 +480,8 @@ def template_to_dict(tpl: Template) -> dict:
         "id": tpl.id,
         "name": tpl.name,
         "baseImagePath": tpl.base_image_path,
-        "overlays": tpl.overlays or [],
         "variables": tpl.variables or [],
+        "masks": tpl.masks or [],
     }
 
 
@@ -468,23 +507,16 @@ def apply_variables(template: dict, row: dict, mapping: dict) -> Image.Image:
         raise FileNotFoundError(f"Template image not found: {base_path}")
     image = Image.open(base_path).convert("RGBA")
 
-    overlays = template.get("overlays") or []
-    if overlays:
-        overlay_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
-        overlay_draw = ImageDraw.Draw(overlay_layer)
-        for overlay in overlays:
-            try:
-                base_rgb = ImageColor.getrgb(overlay.get("color", "#ffffff"))
-            except Exception:
-                base_rgb = (255, 255, 255)
-            opacity = overlay.get("opacity", 0.9)
-            alpha = max(0, min(int(opacity * 255), 255))
-            x = int(overlay.get("x", 0))
-            y = int(overlay.get("y", 0))
-            w = int(overlay.get("w", 0))
-            h = int(overlay.get("h", 0))
-            overlay_draw.rectangle([x, y, x + w, y + h], fill=(*base_rgb, alpha))
-        image = Image.alpha_composite(image, overlay_layer)
+    masks = template.get("masks") or []
+    if masks:
+        mask_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        for mask in masks:
+            mask_img = load_mask_image(mask)
+            if not mask_img:
+                continue
+            mask_img = mask_img.resize(image.size)
+            mask_layer = Image.alpha_composite(mask_layer, mask_img)
+        image = Image.alpha_composite(image, mask_layer)
 
     draw = ImageDraw.Draw(image)
 
@@ -693,15 +725,15 @@ async def create_or_update_template(payload: dict, db: Session = Depends(get_ses
     if tpl:
         tpl.name = payload.get("name", tpl.name)
         tpl.base_image_path = payload.get("baseImagePath", tpl.base_image_path)
-        tpl.overlays = payload.get("overlays", tpl.overlays or [])
         tpl.variables = payload.get("variables", tpl.variables)
+        tpl.masks = payload.get("masks", tpl.masks or [])
     else:
         tpl = Template(
             id=tpl_id,
             name=payload.get("name", "Untitled"),
             base_image_path=payload.get("baseImagePath", ""),
-            overlays=payload.get("overlays", []),
             variables=payload.get("variables", []),
+            masks=payload.get("masks", []),
         )
         db.add(tpl)
     db.commit()
@@ -722,6 +754,21 @@ async def upload_template_image(image: UploadFile = File(...)):
         shutil.copyfileobj(image.file, f)
     rel_path = f"/uploads/templates/{filename}"
     return {"path": rel_path, "filename": filename}
+
+
+@app.post("/api/templates/upload-mask")
+async def upload_template_mask(mask: UploadFile = File(...)):
+    if not mask.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    content_type = mask.content_type or "image/png"
+    try:
+        content = await mask.read()
+    except Exception:
+        content = mask.file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty mask upload")
+    data_url = f"data:{content_type};base64,{base64.b64encode(content).decode('utf-8')}"
+    return {"data": data_url, "filename": mask.filename}
 
 
 @app.post("/api/csv/inspect")
