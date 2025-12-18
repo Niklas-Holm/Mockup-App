@@ -16,7 +16,6 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
   const [editingVarLabel, setEditingVarLabel] = useState("");
   const [bgSize, setBgSize] = useState({ width: 1200, height: 700 });
   const containerWidth = Math.min(bgSize.width, 900);
-  const containerHeight = (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height;
   const scale = containerWidth / bgSize.width;
 
   useEffect(() => {
@@ -26,9 +25,16 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
       setActiveOverlayId(null);
       return;
     }
-    setLocalTemplate({ ...template, overlays: template.overlays || [], variables: template.variables || [] });
-    setActiveVarId(template?.variables?.[0]?.id || null);
-    setActiveOverlayId(template?.overlays?.[0]?.id || null);
+    const normalizedTemplate = { ...template, overlays: template.overlays || [], variables: template.variables || [] };
+    setLocalTemplate(normalizedTemplate);
+    setActiveVarId((prev) => {
+      if (prev && normalizedTemplate.variables.some((v) => v.id === prev)) return prev;
+      return normalizedTemplate.variables[0]?.id || null;
+    });
+    setActiveOverlayId((prev) => {
+      if (prev && (normalizedTemplate.overlays || []).some((o) => o.id === prev)) return prev;
+      return (normalizedTemplate.overlays || [])[0]?.id || null;
+    });
     setEditingVarId(null);
     setEditingVarLabel("");
   }, [template]);
