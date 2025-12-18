@@ -5,9 +5,10 @@ import io
 import json
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import List, Optional, Set
 
 import requests
 from fastapi import Depends, File, Form, HTTPException, UploadFile
@@ -15,8 +16,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
 # Optional Cloudinary dependency
 try:
@@ -29,6 +31,8 @@ except ImportError:
 
 BASE_DIR = os.path.dirname(__file__)
 DATA_DIR = os.path.join(BASE_DIR, "generated")
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+UPLOADS_TEMPLATE_DIR = os.path.join(UPLOADS_DIR, "templates")
 
 
 def load_env(path: str = ".env"):
@@ -49,7 +53,7 @@ def load_env(path: str = ".env"):
 load_env()
 
 from db import Base, SessionLocal, engine, get_session  # noqa: E402
-from models import Job, Template  # noqa: E402
+from models import Job, ProcessedCompany, Template  # noqa: E402
 
 CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME", "")
 CLOUD_API_KEY = os.getenv("CLOUDINARY_API_KEY", "")
@@ -65,6 +69,8 @@ if CLOUDINARY_AVAILABLE and CLOUD_NAME and CLOUD_API_KEY and CLOUD_API_SECRET:
         secure=True,
     )
 
+# Ensure upload folder exists before mounting static files
+os.makedirs(UPLOADS_TEMPLATE_DIR, exist_ok=True)
 
 app = FastAPI()
 
@@ -77,6 +83,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "template")), name="static")
+app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 
 # === Helpers ===
@@ -95,6 +102,36 @@ def ensure_data_dir():
         os.makedirs(DATA_DIR, exist_ok=True)
 
 
+def ensure_upload_dir():
+    if not os.path.exists(UPLOADS_TEMPLATE_DIR):
+        os.makedirs(UPLOADS_TEMPLATE_DIR, exist_ok=True)
+
+
+def run_migrations(engine):
+    """Apply lightweight in-place migrations for existing databases."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        try:
+            template_cols = {c["name"] for c in insp.get_columns("templates")}
+        except Exception:
+            template_cols = set()
+        if "overlays" not in template_cols:
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE templates ADD COLUMN overlays JSONB DEFAULT '[]'::jsonb"))
+            else:
+                conn.execute(text("ALTER TABLE templates ADD COLUMN overlays JSON DEFAULT '[]'"))
+
+        try:
+            job_cols = {c["name"] for c in insp.get_columns("jobs")}
+        except Exception:
+            job_cols = set()
+        if "skip_processed" not in job_cols:
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN skip_processed BOOLEAN DEFAULT FALSE"))
+            else:
+                conn.execute(text("ALTER TABLE jobs ADD COLUMN skip_processed BOOLEAN DEFAULT 0"))
+        if "identifier_column" not in job_cols:
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN identifier_column TEXT"))
 def resolve_template_image_path(path: str) -> str:
     """Return an absolute filesystem path for the template image."""
     # Already absolute and exists
@@ -117,6 +154,7 @@ def default_template():
         "id": "default",
         "name": "Default Mockup",
         "baseImagePath": "/static/mockup-template.jpg",
+        "overlays": [],
         "variables": [
             {
                 "id": "short_name",
@@ -173,6 +211,7 @@ def roofing_template():
         "id": "roofing",
         "name": "Roofing Mockup",
         "baseImagePath": "/static/roofing-template.jpg",
+        "overlays": [],
         "variables": [
             {
                 "id": "short_name",
@@ -229,6 +268,7 @@ def plumber_template():
         "id": "plumber-1",
         "name": "Plumber Mockup",
         "baseImagePath": "/static/plumber-template-1.png",
+        "overlays": [],
         "variables": [
             {
                 "id": "short_name",
@@ -401,6 +441,7 @@ def template_to_dict(tpl: Template) -> dict:
         "id": tpl.id,
         "name": tpl.name,
         "baseImagePath": tpl.base_image_path,
+        "overlays": tpl.overlays or [],
         "variables": tpl.variables or [],
     }
 
@@ -416,6 +457,8 @@ def job_to_dict(job: Job) -> dict:
         "mapping": job.mapping or {},
         "template_id": job.template_id,
         "csv_path": job.csv_path,
+        "skip_processed": bool(job.skip_processed),
+        "identifier_column": job.identifier_column,
     }
 
 
@@ -423,7 +466,26 @@ def apply_variables(template: dict, row: dict, mapping: dict) -> Image.Image:
     base_path = resolve_template_image_path(template["baseImagePath"])
     if not os.path.exists(base_path):
         raise FileNotFoundError(f"Template image not found: {base_path}")
-    image = Image.open(base_path).convert("RGB")
+    image = Image.open(base_path).convert("RGBA")
+
+    overlays = template.get("overlays") or []
+    if overlays:
+        overlay_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay_layer)
+        for overlay in overlays:
+            try:
+                base_rgb = ImageColor.getrgb(overlay.get("color", "#ffffff"))
+            except Exception:
+                base_rgb = (255, 255, 255)
+            opacity = overlay.get("opacity", 0.9)
+            alpha = max(0, min(int(opacity * 255), 255))
+            x = int(overlay.get("x", 0))
+            y = int(overlay.get("y", 0))
+            w = int(overlay.get("w", 0))
+            h = int(overlay.get("h", 0))
+            overlay_draw.rectangle([x, y, x + w, y + h], fill=(*base_rgb, alpha))
+        image = Image.alpha_composite(image, overlay_layer)
+
     draw = ImageDraw.Draw(image)
 
     for variable in template.get("variables", []):
@@ -440,7 +502,7 @@ def apply_variables(template: dict, row: dict, mapping: dict) -> Image.Image:
             draw_text_block(draw, variable, value)
         elif variable["type"] == "image":
             paste_image(image, variable, value)
-    return image
+    return image.convert("RGB")
 
 
 def public_id_for_row(template_id: str, row_index: int, row: dict) -> str:
@@ -505,7 +567,14 @@ def serialize_rows_to_csv(rows: List[dict], mockup_column: str = "mockup_url") -
     return output.getvalue()
 
 
-async def run_job(job_id: str, rows: List[dict], template: dict, mapping: dict):
+async def run_job(
+    job_id: str,
+    rows: List[dict],
+    template: dict,
+    mapping: dict,
+    skip_processed: bool = False,
+    identifier_column: Optional[str] = None,
+):
     ensure_data_dir()
     session = SessionLocal()
     job = session.get(Job, job_id)
@@ -515,19 +584,37 @@ async def run_job(job_id: str, rows: List[dict], template: dict, mapping: dict):
     total = len(rows)
     results = []
     mockup_column = "mockup_url"
+    identifier_column = identifier_column or job.identifier_column
+    processed_cache: Set[str] = set()
+    if skip_processed and identifier_column:
+        existing = session.query(ProcessedCompany.identifier).all()
+        processed_cache = {row[0] for row in existing if row[0]}
 
     for idx, row in enumerate(rows):
         status = {"row": idx, "status": "pending", "url": None, "error": None}
-        try:
-            image = apply_variables(template, row, mapping)
-            url = upload_to_cloudinary(image, template["id"], idx, row)
-            row[mockup_column] = url
-            status["status"] = "done"
-            status["url"] = url
-        except Exception as e:
-            status["status"] = "error"
-            status["error"] = str(e)
-            row[mockup_column] = ""
+        identifier_value = None
+        if identifier_column:
+            identifier_value = str(row.get(identifier_column) or "").strip()
+
+        if skip_processed and identifier_value and identifier_value in processed_cache:
+            status.update({"status": "skipped", "error": "Identifier already processed", "url": None})
+            row[mockup_column] = row.get(mockup_column, "")
+        else:
+            try:
+                image = apply_variables(template, row, mapping)
+                url = upload_to_cloudinary(image, template["id"], idx, row)
+                row[mockup_column] = url
+                status["status"] = "done"
+                status["url"] = url
+                if identifier_value and identifier_value not in processed_cache:
+                    processed_cache.add(identifier_value)
+                    if not session.query(ProcessedCompany).filter_by(identifier=identifier_value).first():
+                        session.add(ProcessedCompany(identifier=identifier_value))
+            except Exception as e:
+                status["status"] = "error"
+                status["error"] = str(e)
+                row[mockup_column] = ""
+
         results.append(status)
         job.progress = int(((idx + 1) / total) * 100)
         job.results = results
@@ -555,7 +642,9 @@ async def run_job(job_id: str, rows: List[dict], template: dict, mapping: dict):
 # === Routes ===
 @app.on_event("startup")
 async def seed_templates():
+    ensure_upload_dir()
     Base.metadata.create_all(engine)
+    run_migrations(engine)
     session = SessionLocal()
     try:
         has_templates = session.query(Template).first()
@@ -573,6 +662,7 @@ async def seed_templates():
                         id=tpl["id"],
                         name=tpl["name"],
                         base_image_path=tpl["baseImagePath"],
+                        overlays=tpl.get("overlays", []),
                         variables=tpl.get("variables", []),
                     )
                 )
@@ -603,18 +693,35 @@ async def create_or_update_template(payload: dict, db: Session = Depends(get_ses
     if tpl:
         tpl.name = payload.get("name", tpl.name)
         tpl.base_image_path = payload.get("baseImagePath", tpl.base_image_path)
+        tpl.overlays = payload.get("overlays", tpl.overlays or [])
         tpl.variables = payload.get("variables", tpl.variables)
     else:
         tpl = Template(
             id=tpl_id,
             name=payload.get("name", "Untitled"),
             base_image_path=payload.get("baseImagePath", ""),
+            overlays=payload.get("overlays", []),
             variables=payload.get("variables", []),
         )
         db.add(tpl)
     db.commit()
     db.refresh(tpl)
     return {"template": template_to_dict(tpl)}
+
+
+@app.post("/api/templates/upload-image")
+async def upload_template_image(image: UploadFile = File(...)):
+    if not image.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    ensure_upload_dir()
+    _, ext = os.path.splitext(image.filename)
+    ext = ext if ext else ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    dest_path = os.path.join(UPLOADS_TEMPLATE_DIR, filename)
+    with open(dest_path, "wb") as f:
+        shutil.copyfileobj(image.file, f)
+    rel_path = f"/uploads/templates/{filename}"
+    return {"path": rel_path, "filename": filename}
 
 
 @app.post("/api/csv/inspect")
@@ -662,6 +769,8 @@ async def start_batch(
     template_id: str = Form(...),
     mapping: str = Form(...),
     csv_file: UploadFile = File(...),
+    skip_processed: bool = Form(False),
+    identifier_column: Optional[str] = Form(None),
     db: Session = Depends(get_session),
 ):
     try:
@@ -686,10 +795,14 @@ async def start_batch(
         mapping=mapping_dict,
         template_id=template_id,
         csv_path=None,
+        skip_processed=bool(skip_processed),
+        identifier_column=identifier_column,
     )
     db.add(job)
     db.commit()
-    asyncio.create_task(run_job(job_id, rows, tpl, mapping_dict))
+    asyncio.create_task(
+        run_job(job_id, rows, tpl, mapping_dict, skip_processed=bool(skip_processed), identifier_column=identifier_column)
+    )
     return {"job_id": job_id, "total_rows": len(rows)}
 
 

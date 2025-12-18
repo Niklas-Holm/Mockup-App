@@ -7,16 +7,30 @@ const API_BASE = "http://localhost:8000/api";
 const BACKEND_BASE = API_BASE.replace(/\/api$/, "");
 
 function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = false }) {
-  const [localTemplate, setLocalTemplate] = useState(template);
+  const [localTemplate, setLocalTemplate] = useState(
+    template ? { ...template, overlays: template.overlays || [], variables: template.variables || [] } : template
+  );
   const [activeVarId, setActiveVarId] = useState(template?.variables?.[0]?.id || null);
+  const [activeOverlayId, setActiveOverlayId] = useState(template?.overlays?.[0]?.id || null);
+  const [editingVarId, setEditingVarId] = useState(null);
+  const [editingVarLabel, setEditingVarLabel] = useState("");
   const [bgSize, setBgSize] = useState({ width: 1200, height: 700 });
   const containerWidth = Math.min(bgSize.width, 900);
   const containerHeight = (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height;
   const scale = containerWidth / bgSize.width;
 
   useEffect(() => {
-    setLocalTemplate(template);
+    if (!template) {
+      setLocalTemplate(null);
+      setActiveVarId(null);
+      setActiveOverlayId(null);
+      return;
+    }
+    setLocalTemplate({ ...template, overlays: template.overlays || [], variables: template.variables || [] });
     setActiveVarId(template?.variables?.[0]?.id || null);
+    setActiveOverlayId(template?.overlays?.[0]?.id || null);
+    setEditingVarId(null);
+    setEditingVarLabel("");
   }, [template]);
 
   useEffect(() => {
@@ -33,6 +47,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
 
   if (!localTemplate) return null;
   const activeVar = localTemplate.variables.find((v) => v.id === activeVarId);
+  const activeOverlay = (localTemplate.overlays || []).find((o) => o.id === activeOverlayId);
 
   const updateVar = (id, changes, save = false) => {
     const updated = {
@@ -43,6 +58,44 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
     if (save) {
       onSave(updated);
     }
+  };
+
+  const updateOverlay = (id, changes, save = false) => {
+    const updated = {
+      ...localTemplate,
+      overlays: (localTemplate.overlays || []).map((o) => (o.id === id ? { ...o, ...changes } : o)),
+    };
+    setLocalTemplate(updated);
+    if (save) {
+      onSave(updated);
+    }
+  };
+
+  const addOverlay = () => {
+    const newOverlay = {
+      id: `overlay_${Date.now()}`,
+      label: "Logo cover",
+      x: 80,
+      y: 80,
+      w: 200,
+      h: 120,
+      color: "#ffffff",
+      opacity: 0.9,
+    };
+    const updated = { ...localTemplate, overlays: [...(localTemplate.overlays || []), newOverlay] };
+    setLocalTemplate(updated);
+    setActiveOverlayId(newOverlay.id);
+    onSave(updated);
+  };
+
+  const removeOverlay = (id) => {
+    const filtered = (localTemplate.overlays || []).filter((o) => o.id !== id);
+    const updated = { ...localTemplate, overlays: filtered };
+    setLocalTemplate(updated);
+    if (activeOverlayId === id) {
+      setActiveOverlayId(filtered[0]?.id || null);
+    }
+    onSave(updated);
   };
 
   const getPreviewValue = (variable) => {
@@ -94,27 +147,84 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
     >
       <div className="flex items-center justify-between">
         <h3 className="font-semibold">Placement Editor</h3>
-        <button
-          className="px-3 py-1 rounded bg-blue-600 text-white text-sm cursor-pointer"
-          onClick={() => onSave(localTemplate)}
-        >
-          Save Template
-        </button>
+        <div className="flex gap-2">
+          <button
+            className="px-3 py-1 rounded bg-orange-500 text-white text-sm cursor-pointer"
+            onClick={addOverlay}
+            disabled={!localTemplate}
+          >
+            Cover logo area
+          </button>
+          <button
+            className="px-3 py-1 rounded bg-blue-600 text-white text-sm cursor-pointer"
+            onClick={() => onSave(localTemplate)}
+          >
+            Save Template
+          </button>
+        </div>
       </div>
       <div
         className={`relative border ${darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"}`}
         style={{
           width: Math.min(bgSize.width, 900),
           height: (Math.min(bgSize.width, 900) / bgSize.width) * bgSize.height,
-          backgroundImage: `url(${
-            template.baseImagePath.startsWith("http")
-              ? template.baseImagePath
-              : `${BACKEND_BASE}${template.baseImagePath.startsWith("/") ? "" : "/"}${template.baseImagePath}`
-          })`,
+          backgroundImage: template?.baseImagePath
+            ? `url(${
+                template.baseImagePath.startsWith("http")
+                  ? template.baseImagePath
+                  : `${BACKEND_BASE}${template.baseImagePath.startsWith("/") ? "" : "/"}${template.baseImagePath}`
+              })`
+            : "none",
           backgroundSize: "cover",
           overflow: "hidden",
         }}
       >
+        {(localTemplate.overlays || []).map((overlay) => {
+          const scaleVal = Math.min(bgSize.width, 900) / bgSize.width;
+          const w = overlay.w * scaleVal;
+          const h = overlay.h * scaleVal;
+          const x = overlay.x * scaleVal;
+          const y = overlay.y * scaleVal;
+          return (
+            <Rnd
+              key={overlay.id}
+              size={{ width: w, height: h }}
+              position={{ x, y }}
+              bounds="parent"
+              style={{ zIndex: 5 }}
+              onDragStop={(_, data) =>
+                updateOverlay(
+                  overlay.id,
+                  { x: Math.round(data.x / scaleVal), y: Math.round(data.y / scaleVal) },
+                  true
+                )
+              }
+              onResizeStop={(_, __, ref, ___, position) =>
+                updateOverlay(
+                  overlay.id,
+                  {
+                    w: Math.round(ref.offsetWidth / scaleVal),
+                    h: Math.round(ref.offsetHeight / scaleVal),
+                    x: Math.round(position.x / scaleVal),
+                    y: Math.round(position.y / scaleVal),
+                  },
+                  true
+                )
+              }
+              onClick={() => {
+                setActiveOverlayId(overlay.id);
+                setActiveVarId(null);
+              }}
+              className={`border-2 ${
+                activeOverlayId === overlay.id ? "border-blue-400" : "border-sky-300"
+              } bg-blue-300/25`}
+            >
+              <div className="absolute top-0 left-0 text-[10px] px-1 bg-white/70 text-slate-700 pointer-events-none">
+                {overlay.label || "Logo cover"}
+              </div>
+            </Rnd>
+          );
+        })}
         {localTemplate.variables.map((variable) => {
           const scale = Math.min(bgSize.width, 900) / bgSize.width;
           const w = variable.w * scale;
@@ -150,6 +260,7 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
               }
               bounds="parent"
               onClick={() => setActiveVarId(variable.id)}
+              style={{ zIndex: 10 }}
               className={`border-2 ${
                 activeVarId === variable.id ? "border-blue-500" : "border-orange-400"
               } bg-orange-200/30`}
@@ -221,7 +332,66 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
       {activeVar && (
         <div className="grid grid-cols-2 gap-2 text-sm">
           <div className="col-span-2 flex justify-between items-center">
-            <span className="font-semibold">{activeVar.label}</span>
+            <div className="flex items-center justify-between w-full gap-3">
+              {editingVarId === activeVar.id ? (
+                <div className="flex items-center gap-2 w-full">
+                  <input
+                    type="text"
+                    className="border rounded px-2 py-1 flex-1"
+                    value={editingVarLabel}
+                    onChange={(e) => setEditingVarLabel(e.target.value)}
+                    autoFocus
+                  />
+                  <button
+                    className="px-2 py-1 rounded bg-blue-600 text-white text-xs"
+                    onClick={() => {
+                      const nextLabel = (editingVarLabel || "").trim() || "Untitled";
+                      updateVar(activeVar.id, { label: nextLabel }, true);
+                      setEditingVarId(null);
+                      setEditingVarLabel("");
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    className="px-2 py-1 rounded border text-xs"
+                    onClick={() => {
+                      setEditingVarId(null);
+                      setEditingVarLabel("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <span className="font-semibold">{activeVar.label}</span>
+                  <button
+                    className="p-2 rounded border border-slate-200 bg-white/60 hover:bg-white transition"
+                    title="Rename variable"
+                    onClick={() => {
+                      setEditingVarId(activeVar.id);
+                      setEditingVarLabel(activeVar.label || "");
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path
+                        d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Z"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M14.06 6.19l2.12-2.12a1.5 1.5 0 0 1 2.12 0l1.41 1.41a1.5 1.5 0 0 1 0 2.12l-2.12 2.12"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
           <label className="flex flex-col gap-1">
             X
@@ -326,6 +496,129 @@ function PlacementEditor({ template, onSave, previewRow, mapping, darkMode = fal
           )}
         </div>
       )}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold">Logo cover overlays</p>
+            <p className="text-xs text-slate-500">Dæk eksisterende logoer med et felt og placer dit eget ovenpå.</p>
+          </div>
+          <button
+            className="px-3 py-1 text-xs rounded border border-blue-200 bg-blue-50 text-blue-700"
+            onClick={addOverlay}
+            disabled={!localTemplate}
+          >
+            + Tilføj overlay
+          </button>
+        </div>
+        {(localTemplate?.overlays || []).length === 0 && (
+          <p className="text-xs text-slate-500">Ingen overlays endnu. Brug knappen ovenfor for at male over eksisterende logoer.</p>
+        )}
+        {(localTemplate?.overlays || []).length > 0 && (
+          <div className="flex flex-col gap-2">
+            {(localTemplate.overlays || []).map((overlay) => (
+              <div
+                key={overlay.id}
+                className={`flex items-center justify-between gap-3 border rounded px-2 py-2 text-sm ${
+                  activeOverlayId === overlay.id ? "border-blue-500" : "border-slate-200"
+                }`}
+              >
+                <div className="flex flex-col">
+                  <span className="font-semibold">{overlay.label || "Overlay"}</span>
+                  <span className="text-xs text-slate-500">({overlay.w} x {overlay.h})</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-xs underline text-blue-600"
+                    onClick={() => {
+                      setActiveOverlayId(overlay.id);
+                      setActiveVarId(null);
+                    }}
+                  >
+                    Rediger
+                  </button>
+                  <button className="text-xs underline text-red-600" onClick={() => removeOverlay(overlay.id)}>
+                    Fjern
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {activeOverlay && (
+          <div className="grid grid-cols-2 gap-2 text-sm">
+            <div className="col-span-2 font-semibold flex items-center justify-between">
+              <span>{activeOverlay.label || "Overlay"}</span>
+              <label className="flex items-center gap-2 text-xs">
+                Navn
+                <input
+                  type="text"
+                  className="border rounded px-2 py-1"
+                  value={activeOverlay.label || ""}
+                  onChange={(e) => updateOverlay(activeOverlay.id, { label: e.target.value }, true)}
+                />
+              </label>
+            </div>
+            <label className="flex flex-col gap-1">
+              X
+              <input
+                type="number"
+                className="border rounded px-2 py-1"
+                value={activeOverlay.x}
+                onChange={(e) => updateOverlay(activeOverlay.id, { x: Number(e.target.value) }, true)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Y
+              <input
+                type="number"
+                className="border rounded px-2 py-1"
+                value={activeOverlay.y}
+                onChange={(e) => updateOverlay(activeOverlay.id, { y: Number(e.target.value) }, true)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Width
+              <input
+                type="number"
+                className="border rounded px-2 py-1"
+                value={activeOverlay.w}
+                onChange={(e) => updateOverlay(activeOverlay.id, { w: Number(e.target.value) }, true)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Height
+              <input
+                type="number"
+                className="border rounded px-2 py-1"
+                value={activeOverlay.h}
+                onChange={(e) => updateOverlay(activeOverlay.id, { h: Number(e.target.value) }, true)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Farve
+              <input
+                type="color"
+                className="border rounded px-2 py-1 h-10"
+                value={activeOverlay.color || "#ffffff"}
+                onChange={(e) => updateOverlay(activeOverlay.id, { color: e.target.value }, true)}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              Opacitet
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                className="w-full"
+                value={activeOverlay.opacity ?? 0.9}
+                onChange={(e) => updateOverlay(activeOverlay.id, { opacity: Number(e.target.value) }, true)}
+              />
+              <span className="text-xs text-slate-500">{Math.round((activeOverlay.opacity ?? 0.9) * 100)}%</span>
+            </label>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -340,9 +633,24 @@ export default function AppPage() {
   const [previewItems, setPreviewItems] = useState([]);
   const [jobId, setJobId] = useState(null);
   const [jobStatus, setJobStatus] = useState(null);
-  const [loading, setLoading] = useState({ inspect: false, preview: false, batch: false, saveTemplate: false });
+  const [loading, setLoading] = useState({
+    inspect: false,
+    preview: false,
+    batch: false,
+    saveTemplate: false,
+    createTemplate: false,
+    uploadTemplate: false,
+  });
   const [error, setError] = useState("");
+  const [templateModalError, setTemplateModalError] = useState("");
   const [darkMode, setDarkMode] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [newTemplateName, setNewTemplateName] = useState("");
+  const [newTemplateFile, setNewTemplateFile] = useState(null);
+  const [identifierColumn, setIdentifierColumn] = useState("");
+  const [skipProcessed, setSkipProcessed] = useState(true);
+  const [editingMappingVarId, setEditingMappingVarId] = useState(null);
+  const [editingMappingLabel, setEditingMappingLabel] = useState("");
   const stepsBarRef = React.useRef(null);
   const uploadRef = React.useRef(null);
   const mapRef = React.useRef(null);
@@ -355,6 +663,14 @@ export default function AppPage() {
   const handleLogout = () => {
     logout();
     navigate("/");
+  };
+
+  const normalizeTemplate = (tpl) => (tpl ? { ...tpl, overlays: tpl.overlays || [], variables: tpl.variables || [] } : tpl);
+  const resolveImageUrl = (path) => {
+    if (!path) return "";
+    return path.startsWith("http")
+      ? path
+      : `${BACKEND_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
   };
 
   const steps = [
@@ -378,9 +694,10 @@ export default function AppPage() {
       try {
         const res = await fetch(`${API_BASE}/templates`);
         const data = await res.json();
-        setTemplates(data.templates || []);
-        if ((data.templates || []).length > 0) {
-          setSelectedTemplate(data.templates[0]);
+        const normalized = (data.templates || []).map((tpl) => normalizeTemplate(tpl));
+        setTemplates(normalized);
+        if (normalized.length > 0) {
+          setSelectedTemplate(normalized[0]);
         }
       } catch (e) {
         console.error("Failed to load templates", e);
@@ -419,8 +736,16 @@ export default function AppPage() {
       const res = await fetch(`${API_BASE}/csv/inspect`, { method: "POST", body: formData });
       if (!res.ok) throw new Error("Failed to inspect CSV");
       const data = await res.json();
-      setHeaders(data.headers || []);
+      const incomingHeaders = data.headers || [];
+      setHeaders(incomingHeaders);
       setSampleRows(data.sample_rows || []);
+      if (incomingHeaders.length > 0) {
+        setIdentifierColumn((prev) => {
+          if (prev) return prev;
+          const guess = incomingHeaders.find((h) => /company|firma|virksomhed|org/i.test(h));
+          return guess || incomingHeaders[0] || "";
+        });
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -429,7 +754,7 @@ export default function AppPage() {
   };
 
   const currentTemplate = useMemo(
-    () => templates.find((t) => t.id === selectedTemplate?.id) || selectedTemplate,
+    () => normalizeTemplate(templates.find((t) => t.id === selectedTemplate?.id) || selectedTemplate),
     [templates, selectedTemplate]
   );
 
@@ -440,7 +765,7 @@ export default function AppPage() {
   const updateTemplateState = (updater) => {
     setSelectedTemplate((prev) => {
       if (!prev) return prev;
-      const updated = updater(prev);
+      const updated = normalizeTemplate(updater(prev));
       setTemplates((prevList) => {
         const others = prevList.filter((t) => t.id !== updated.id);
         return [...others, updated];
@@ -466,7 +791,7 @@ export default function AppPage() {
             : undefined,
         defaultValue: "",
       };
-      return { ...tpl, variables: [...tpl.variables, newVar] };
+      return { ...tpl, variables: [...(tpl.variables || []), newVar] };
     });
   };
 
@@ -516,12 +841,22 @@ export default function AppPage() {
 
   const handleBatch = async () => {
     if (!csvFile || !currentTemplate) return;
+    if (skipProcessed && !identifierColumn) {
+      setError("Vælg en identifier-kolonne for at kunne springe eksisterende virksomheder over.");
+      return;
+    }
+    setJobStatus(null);
+    setJobId(null);
     setLoading((prev) => ({ ...prev, batch: true }));
     setError("");
     const formData = new FormData();
     formData.append("template_id", currentTemplate.id);
     formData.append("mapping", JSON.stringify(mapping));
     formData.append("csv_file", csvFile);
+    formData.append("skip_processed", skipProcessed ? "true" : "false");
+    if (identifierColumn) {
+      formData.append("identifier_column", identifierColumn);
+    }
     try {
       const res = await fetch(`${API_BASE}/batch`, { method: "POST", body: formData });
       if (!res.ok) throw new Error("Batch start failed");
@@ -538,14 +873,16 @@ export default function AppPage() {
   const handleTemplateSave = async (tpl) => {
     setLoading((prev) => ({ ...prev, saveTemplate: true }));
     try {
+      const payload = normalizeTemplate(tpl);
       const res = await fetch(`${API_BASE}/templates`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tpl),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("Failed to save template");
       const data = await res.json();
-      const keptVarIds = new Set((data.template?.variables || []).map((v) => v.id));
+      const savedTemplate = normalizeTemplate(data.template);
+      const keptVarIds = new Set((savedTemplate?.variables || []).map((v) => v.id));
       setMapping((prev) => {
         const next = { ...prev };
         Object.keys(next).forEach((key) => {
@@ -555,15 +892,68 @@ export default function AppPage() {
         });
         return next;
       });
-      setSelectedTemplate(data.template);
+      setSelectedTemplate(savedTemplate);
       setTemplates((prev) => {
-        const others = prev.filter((t) => t.id !== data.template.id);
-        return [...others, data.template];
+        const others = prev.filter((t) => t.id !== savedTemplate.id);
+        return [...others, savedTemplate];
       });
+      return savedTemplate;
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading((prev) => ({ ...prev, saveTemplate: false }));
+    }
+  };
+
+  const uploadTemplateImage = async (file) => {
+    const formData = new FormData();
+    formData.append("image", file);
+    const res = await fetch(`${API_BASE}/templates/upload-image`, { method: "POST", body: formData });
+    if (!res.ok) throw new Error("Kunne ikke uploade mockup-billede");
+    return res.json();
+  };
+
+  const handleCreateTemplate = async () => {
+    setTemplateModalError("");
+    if (!newTemplateName || !newTemplateFile) {
+      setTemplateModalError("Navn og mockup-billede er påkrævet.");
+      return;
+    }
+    setLoading((prev) => ({ ...prev, createTemplate: true }));
+    try {
+      const uploadRes = await uploadTemplateImage(newTemplateFile);
+      const freshTemplate = normalizeTemplate({
+        id: `tpl_${Date.now()}`,
+        name: newTemplateName,
+        baseImagePath: uploadRes.path,
+        overlays: [],
+        variables: [],
+      });
+      const saved = await handleTemplateSave(freshTemplate);
+      if (saved) {
+        setSelectedTemplate(saved);
+      }
+      setShowTemplateModal(false);
+      setNewTemplateName("");
+      setNewTemplateFile(null);
+    } catch (e) {
+      setTemplateModalError(e.message);
+    } finally {
+      setLoading((prev) => ({ ...prev, createTemplate: false }));
+    }
+  };
+
+  const handleReplaceBaseImage = async (file) => {
+    if (!currentTemplate || !file) return;
+    setError("");
+    setLoading((prev) => ({ ...prev, uploadTemplate: true }));
+    try {
+      const uploadRes = await uploadTemplateImage(file);
+      await handleTemplateSave({ ...currentTemplate, baseImagePath: uploadRes.path });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading((prev) => ({ ...prev, uploadTemplate: false }));
     }
   };
 
@@ -689,16 +1079,64 @@ export default function AppPage() {
                 </div>
               </div>
             )}
+            {sampleRows.length > 0 && (
+              <div className="text-sm space-y-2">
+                <p className="font-semibold">CSV preview</p>
+                <div className="overflow-auto border rounded">
+                  <table className="min-w-full text-xs">
+                    <thead className="bg-slate-100">
+                      <tr>
+                        {headers.map((h) => (
+                          <th key={h} className="px-2 py-1 text-left border-b">
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sampleRows.slice(0, 5).map((row, idx) => (
+                        <tr key={idx} className="odd:bg-white even:bg-slate-50">
+                          {headers.map((h) => (
+                            <td key={`${idx}-${h}`} className="px-2 py-1 border-b whitespace-nowrap">
+                              {row[h]}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </section>
 
           <section ref={mapRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-4`}>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
                 <p className={`text-xs font-semibold ${subText}`}>Step 2</p>
                 <h2 className="text-lg font-semibold">Template & Variable Mapping</h2>
-                <p className={`text-sm ${subText}`}>Add variables, map them to CSV headers, then save.</p>
+                <p className={`text-sm ${subText}`}>Upload eller vælg template, map variablerne og gem.</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  className="px-3 py-2 rounded border text-sm cursor-pointer"
+                  onClick={() => {
+                    setTemplateModalError("");
+                    setShowTemplateModal(true);
+                  }}
+                >
+                  + Ny template
+                </button>
+                <label className="px-3 py-2 rounded border text-sm cursor-pointer bg-slate-50">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => e.target.files?.[0] && handleReplaceBaseImage(e.target.files[0])}
+                    disabled={!currentTemplate || loading.uploadTemplate}
+                  />
+                  {loading.uploadTemplate ? "Uploader mockup..." : "Skift mockup-billede"}
+                </label>
                 <button
                   className="px-3 py-2 rounded bg-blue-600 text-white text-sm disabled:bg-slate-300 cursor-pointer"
                   disabled={!currentTemplate}
@@ -708,66 +1146,161 @@ export default function AppPage() {
                 </button>
               </div>
             </div>
-            <div className="flex flex-wrap gap-3 items-center">
-              <label className="text-sm font-semibold text-slate-700">Template</label>
-              <select
-                className="border rounded px-3 py-2 text-sm cursor-pointer"
-                value={currentTemplate?.id || ""}
-                onChange={(e) => {
-                  const tpl = templates.find((t) => t.id === e.target.value);
-                  setSelectedTemplate(tpl || null);
-                }}
-              >
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}
-                  </option>
-                ))}
-              </select>
-              <div className="flex gap-2">
-                <button
-                  className="px-3 py-1 rounded bg-slate-100 text-sm border cursor-pointer"
-                  onClick={() => addVariable("text")}
-                  disabled={!currentTemplate}
-                >
-                  + Text variable
-                </button>
-                <button
-                  className="px-3 py-1 rounded bg-slate-100 text-sm border cursor-pointer"
-                  onClick={() => addVariable("image")}
-                  disabled={!currentTemplate}
-                >
-                  + Image variable
-                </button>
-              </div>
-            </div>
-            {currentTemplate && (
-              <div className="space-y-2">
-                {currentTemplate.variables.map((v) => (
-                  <div key={v.id} className="flex items-center gap-3 border rounded-lg px-3 py-2">
-                    <div className="flex-1">
-                      <p className="font-semibold text-sm">{v.label}</p>
-                      <p className="text-xs text-slate-500">{v.type === "text" ? "Text" : "Image"} • {v.id}</p>
-                    </div>
-                    <select
-                      className="border rounded px-2 py-1 text-sm cursor-pointer"
-                      value={mapping[v.id] || ""}
-                      onChange={(e) => handleMappingChange(v.id, e.target.value)}
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-semibold mb-2">Template bibliotek</p>
+                {templates.length === 0 && <p className="text-xs text-slate-500">Ingen templates endnu. Opret din første ovenfor.</p>}
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {templates.map((t) => (
+                    <div
+                      key={t.id}
+                      className={`border rounded-lg p-2 cursor-pointer transition ${
+                        currentTemplate?.id === t.id ? "border-blue-500 shadow-sm" : "border-slate-200"
+                      } ${darkMode ? "bg-slate-800" : "bg-white"}`}
+                      onClick={() => setSelectedTemplate(t)}
                     >
-                      <option value="">Map column</option>
-                      {headers.map((h) => (
-                        <option key={h} value={h}>
-                          {h}
-                        </option>
-                      ))}
-                    </select>
-                    <button className="text-red-600 text-xs underline" onClick={() => removeVariable(v.id)}>
-                      Remove
-                    </button>
-                  </div>
-                ))}
+                      <div className="aspect-video rounded overflow-hidden border bg-slate-100">
+                        {t.baseImagePath ? (
+                          <img
+                            src={resolveImageUrl(t.baseImagePath)}
+                            alt={t.name}
+                            className="w-full h-full object-cover"
+                            onError={(e) => (e.currentTarget.style.display = "none")}
+                          />
+                        ) : (
+                          <div className="flex items-center justify-center h-full text-xs text-slate-500">No image</div>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between mt-2 text-sm">
+                        <div>
+                          <p className="font-semibold">{t.name}</p>
+                          <p className="text-xs text-slate-500">{t.variables?.length || 0} felter</p>
+                        </div>
+                        {currentTemplate?.id === t.id && (
+                          <span className="text-xs text-green-600 font-semibold">Valgt</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
+              <div className="flex flex-wrap gap-3 items-center">
+                <div className="flex gap-2">
+                  <button
+                    className="px-3 py-1 rounded bg-slate-100 text-sm border cursor-pointer"
+                    onClick={() => addVariable("text")}
+                    disabled={!currentTemplate}
+                  >
+                    + Text variable
+                  </button>
+                  <button
+                    className="px-3 py-1 rounded bg-slate-100 text-sm border cursor-pointer"
+                    onClick={() => addVariable("image")}
+                    disabled={!currentTemplate}
+                  >
+                    + Image variable
+                  </button>
+                </div>
+              </div>
+              {currentTemplate && (
+                <div className="space-y-2">
+                  {currentTemplate.variables.map((v) => (
+                    <div key={v.id} className="flex items-center gap-3 border rounded-lg px-3 py-2">
+                      <div className="flex-1">
+                        {editingMappingVarId === v.id ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              className="border rounded px-2 py-1 text-sm flex-1"
+                              value={editingMappingLabel}
+                              onChange={(e) => setEditingMappingLabel(e.target.value)}
+                              autoFocus
+                            />
+                            <button
+                              className="px-2 py-1 rounded bg-blue-600 text-white text-xs"
+                              onClick={async () => {
+                                const nextLabel = (editingMappingLabel || "").trim() || "Untitled";
+                                const updated = {
+                                  ...currentTemplate,
+                                  variables: (currentTemplate.variables || []).map((existing) =>
+                                    existing.id === v.id ? { ...existing, label: nextLabel } : existing
+                                  ),
+                                };
+                                setSelectedTemplate(updated);
+                                setTemplates((prev) => {
+                                  const others = prev.filter((t) => t.id !== updated.id);
+                                  return [...others, updated];
+                                });
+                                await handleTemplateSave(updated);
+                                setEditingMappingVarId(null);
+                                setEditingMappingLabel("");
+                              }}
+                            >
+                              Save
+                            </button>
+                            <button
+                              className="px-2 py-1 rounded border text-xs"
+                              onClick={() => {
+                                setEditingMappingVarId(null);
+                                setEditingMappingLabel("");
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-sm">{v.label}</p>
+                              <p className="text-xs text-slate-500">
+                                {v.type === "text" ? "Text" : "Image"} • {v.id}
+                              </p>
+                            </div>
+                            <button
+                              className="p-2 rounded border border-slate-200 bg-slate-50 hover:bg-white transition"
+                              title="Rename variable"
+                              onClick={() => {
+                                setEditingMappingVarId(v.id);
+                                setEditingMappingLabel(v.label || "");
+                              }}
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path
+                                  d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Z"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinejoin="round"
+                                />
+                                <path
+                                  d="M14.06 6.19l2.12-2.12a1.5 1.5 0 0 1 2.12 0l1.41 1.41a1.5 1.5 0 0 1 0 2.12l-2.12 2.12"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <select
+                        className="border rounded px-2 py-1 text-sm cursor-pointer"
+                        value={mapping[v.id] || ""}
+                        onChange={(e) => handleMappingChange(v.id, e.target.value)}
+                      >
+                        <option value="">Map column</option>
+                        {headers.map((h) => (
+                          <option key={h} value={h}>
+                            {h}
+                          </option>
+                        ))}
+                      </select>
+                      <button className="text-red-600 text-xs underline" onClick={() => removeVariable(v.id)}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
 
           <section ref={placeRef} className={`${cardClasses} rounded-xl shadow-sm p-4 space-y-3`}>
@@ -836,6 +1369,36 @@ export default function AppPage() {
                 {loading.batch ? "Starting..." : "Run Batch"}
               </button>
             </div>
+            <div className="grid sm:grid-cols-2 gap-3 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={skipProcessed}
+                  onChange={(e) => setSkipProcessed(e.target.checked)}
+                />
+                Spring virksomheder over der allerede har et mockup (gem identifier i databasen)
+              </label>
+              <div className="flex flex-col gap-1">
+                <span className="font-semibold">Identifier kolonne</span>
+                <select
+                  className="border rounded px-2 py-1"
+                  value={identifierColumn}
+                  onChange={(e) => setIdentifierColumn(e.target.value)}
+                  disabled={!headers.length}
+                >
+                  <option value="">Vælg kolonne</option>
+                  {headers.map((h) => (
+                    <option key={h} value={h}>
+                      {h}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-xs text-slate-500">
+                  Vi gemmer værdien i tabellen over virksomheder og springer dem over ved næste kørsel.
+                </span>
+              </div>
+            </div>
             {jobStatus && (
               <div className="space-y-3">
                 <div className="flex items-center justify-between text-sm">
@@ -862,7 +1425,8 @@ export default function AppPage() {
                     </a>
                     <span className="text-sm text-slate-500">
                       {jobStatus.results?.filter((r) => r.status === "done").length || 0} succeeded /{" "}
-                      {jobStatus.results?.length || 0} total
+                      {jobStatus.results?.length || 0} total ·{" "}
+                      {(jobStatus.results || []).filter((r) => r.status === "skipped").length || 0} skipped
                     </span>
                   </div>
                 )}
@@ -875,8 +1439,10 @@ export default function AppPage() {
                           className={`text-xs px-2 py-0.5 rounded ${
                             r.status === "done"
                               ? "bg-green-100 text-green-700"
-                              : r.status === "error"
+                            : r.status === "error"
                               ? "bg-red-100 text-red-700"
+                              : r.status === "skipped"
+                              ? "bg-yellow-100 text-yellow-700"
                               : "bg-slate-100 text-slate-700"
                           }`}
                         >
@@ -897,6 +1463,57 @@ export default function AppPage() {
           </section>
         </div>
       </div>
+      {showTemplateModal && (
+        <div className="fixed inset-0 bg-black/50 z-30 flex items-center justify-center p-4">
+          <div className={`${cardClasses} w-full max-w-lg rounded-xl shadow-lg p-5 space-y-4`}>
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Ny template</h3>
+              <button className="text-sm text-slate-500" onClick={() => setShowTemplateModal(false)}>
+                Luk
+              </button>
+            </div>
+            {templateModalError && (
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 px-3 py-2 rounded">
+                {templateModalError}
+              </div>
+            )}
+            <label className="flex flex-col gap-1 text-sm">
+              Navn
+              <input
+                type="text"
+                className="border rounded px-3 py-2"
+                placeholder="Fx Google Ads mockup"
+                value={newTemplateName}
+                onChange={(e) => setNewTemplateName(e.target.value)}
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              Mockup-billede
+              <input
+                type="file"
+                accept="image/*"
+                className="border rounded px-3 py-2"
+                onChange={(e) => setNewTemplateFile(e.target.files?.[0] || null)}
+              />
+              {newTemplateFile && (
+                <span className="text-xs text-slate-500">Valgt: {newTemplateFile.name}</span>
+              )}
+            </label>
+            <div className="flex justify-end gap-2">
+              <button className="px-3 py-2 text-sm border rounded" onClick={() => setShowTemplateModal(false)}>
+                Annuller
+              </button>
+              <button
+                className="px-4 py-2 text-sm rounded bg-blue-600 text-white disabled:bg-slate-400"
+                onClick={handleCreateTemplate}
+                disabled={loading.createTemplate}
+              >
+                {loading.createTemplate ? "Opretter..." : "Opret template"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

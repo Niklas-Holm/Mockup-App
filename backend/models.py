@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
 
 from db import Base
 
@@ -13,6 +13,7 @@ class Template(Base):
     name = Column(String, nullable=False)
     base_image_path = Column(Text, nullable=False)
     variables = Column(JSON, nullable=False)
+    overlays = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -28,3 +29,13 @@ class Job(Base):
     results = Column(JSON)
     csv_path = Column(Text)
     template_id = Column(String)
+    skip_processed = Column(Boolean, default=False)
+    identifier_column = Column(String)
+
+
+class ProcessedCompany(Base):
+    __tablename__ = "processed_companies"
+
+    id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex)
+    identifier = Column(String, unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
